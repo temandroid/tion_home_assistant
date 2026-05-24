@@ -11,7 +11,13 @@
       }
     },
     "error": {
-      "auth": "Не удалось авторизоваться. Проверьте email и пароль."
+      "invalid_auth": "Неверный email или пароль (invalid_grant).",
+      "client_rejected": "Облако отвергло client_id/secret — Tion обновил мобильное приложение. Нужно перехватить актуальные креды (см. tools/debug_auth.py).",
+      "grant_deprecated": "Tion отключил password-grant (unsupported_grant_type). Требуется миграция auth на OAuth code-flow с PKCE.",
+      "endpoint_gone": "Endpoint api2.magicair.tion.ru недоступен (404/410). Облако перенесли на новый домен — проверьте логи HA.",
+      "captcha": "Облако вернуло HTML (вероятно Cloudflare/captcha). Возможно, IP заблокирован — попробуйте позже или с другого IP.",
+      "cannot_connect": "Не удалось подключиться к api2.magicair.tion.ru. Проверьте интернет и DNS.",
+      "unknown": "Авторизация провалилась по неизвестной причине. Подробности в логах HA (включите DEBUG для custom_components.tion)."
     },
     "abort": {
       "already_configured": "Эта учётная запись уже настроена."
