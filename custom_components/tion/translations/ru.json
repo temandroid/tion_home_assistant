@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tion",
+        "description": "Введите учётные данные облака Tion / MagicAir.",
+        "data": {
+          "username": "Email",
+          "password": "Пароль"
+        }
+      }
+    },
+    "error": {
+      "auth": "Не удалось авторизоваться. Проверьте email и пароль."
+    },
+    "abort": {
+      "already_configured": "Эта учётная запись уже настроена."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Настройки Tion",
+        "data": {
+          "scan_interval": "Период опроса (секунд, 30-3600)",
+          "file_path": "Путь к файлу авторизации"
+        }
+      }
+    }
+  }
+}

@@ -13,23 +13,26 @@
 ### Без HACS:
 1. скачайте zip файл с компонентом
 2. поместите содержимое в `config/custom_components/tion` папку системы Home Assistant
-### ...
-3. добавьте в ваш файл конфигурации (`configuration.yaml`):
+### Настройка (v1.2.0+)
+Начиная с версии 1.2.0 интеграция настраивается через UI:
+
+1. Перезагрузите Home Assistant
+2. `Settings → Devices & Services → Add Integration → Tion`
+3. Введите email/пароль от облака MagicAir — будет произведена проверка
+
+Опции (период опроса, путь к файлу авторизации) меняются через кнопку **Configure** у интеграции.
+
+### Backward-compat: YAML
+Старый блок `tion:` в `configuration.yaml` всё ещё работает — при старте HA он автоматически импортируется в config entry (с deprecation-warning). После успешного импорта рекомендуется удалить YAML-секцию.
+
 ```yaml
+# DEPRECATED — будет автоматически импортировано в UI
 tion:
   username: !secret tion_email
   password: !secret tion_password
-```
-4. не обязательно: можно задать периодичность опроса датчиков (по умолчанию - 120 секунд)
-```yaml
   scan_interval: 600
-```
-5. не обязательно: можно задать альтернативный путь для файла-хранилища аутентификации (по умолчанию - "{homeassistant_config_dir}/tion_auth")
-```yaml
   file_path: "/tmp/tion_auth"
 ```
-6. добавьте `tion_email` и `tion_password` в ваще хранилище паролей Home Assistant `secrets.yaml`
-7. перезагрузите Home Assistant
 ## Использование:
 После перезагрузки, среди устройств должны появиться бризеры `climate.tion_...` и датчики MagicAir `sensor.magicair_..`.
 

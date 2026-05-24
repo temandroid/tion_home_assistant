@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.2.0] - 2026-05-24
+### Изменения
+#### Миграция на config_flow (CR-009, CR-014)
+  - **CR-009:** Добавлена UI-конфигурация через `Settings → Devices & Services → Add Integration → Tion`. Логин/пароль вводятся в форме, валидируются на лету. Опции (`scan_interval`, `file_path`) меняются через `OptionsFlow` без пересоздания entry.
+  - **CR-014:** Credentials хранятся в зашифрованном `.storage/core.config_entries` (HA-managed), не в plaintext-yaml.
+  - Backward-compat: старый `tion:` блок в `configuration.yaml` автоматически импортируется в config entry при первом запуске (с deprecation-warning в лог).
+  - Переписан `__init__.py`: `async_setup_entry` / `async_unload_entry` / `_async_update_listener` для reload при смене опций.
+  - Платформы (`climate`, `sensor`) переведены с `setup_platform` (`discovery.load_platform`) на `async_setup_entry`.
+  - Добавлены переводы UI: `translations/en.json`, `translations/ru.json`.
+  - Вынесены константы в `const.py` (`DOMAIN`, `PLATFORMS`, `DATA_*` и др.).
+  - `manifest.json`: `"config_flow": true`.
+
 ## [1.1.0] - 2026-05-24
 ### Изменения
 #### Исправления по результатам code-review (CR-001..018, кроме CR-009/014)

@@ -33,7 +33,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from tion import Breezer, Zone
 
-from . import TION_API, TION_COORDINATOR
+from .const import DOMAIN, DATA_API, DATA_COORDINATOR
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,25 +58,20 @@ PRESETS = {
 }
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    if discovery_info is None:
-        return
-    tion = hass.data[TION_API]
-    coordinator = hass.data[TION_COORDINATOR]
-    devices = []
-    for d in discovery_info:
-        breezers = tion.get_devices(guid=d["guid"])
-        if not breezers:
-            raise PlatformNotReady(f"Tion: устройство {d['guid']} не найдено")
-        breezer = breezers[0]
-        zones = tion.get_zones(guid=breezer.zone.guid)
+async def async_setup_entry(hass, entry, async_add_entities):
+    data = hass.data[DOMAIN][entry.entry_id]
+    api = data[DATA_API]
+    coordinator = data[DATA_COORDINATOR]
+
+    entities = []
+    for breezer in coordinator.breezers:
+        zones = await hass.async_add_executor_job(api.get_zones, breezer.zone.guid)
         if not zones:
-            raise PlatformNotReady(f"Tion: зона для {d['guid']} не найдена")
+            raise PlatformNotReady(f"Tion: зона для {breezer.guid} не найдена")
         zone = zones[0]
-        coordinator.register(breezer)
         coordinator.register(zone)
-        devices.append(TionClimate(coordinator, breezer, zone))
-    add_entities(devices)
+        entities.append(TionClimate(coordinator, breezer, zone))
+    async_add_entities(entities)
 
 
 class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):

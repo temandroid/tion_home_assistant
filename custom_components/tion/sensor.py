@@ -4,11 +4,10 @@ import logging
 from homeassistant.components.sensor import SensorStateClass, SensorEntity
 from homeassistant.components.sensor import ATTR_STATE_CLASS as STATE_CLASS
 from homeassistant.const import UnitOfTemperature, STATE_UNKNOWN
-from homeassistant.exceptions import PlatformNotReady
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import (
-    TION_API, TION_COORDINATOR,
+from .const import (
+    DOMAIN, DATA_API, DATA_COORDINATOR,
     BREEZER_DEVICE, MAGICAIR_DEVICE,
     CO2_PPM, HUM_PERCENT,
 )
@@ -46,29 +45,18 @@ FAN_STATE_SENSOR = {
 }
 
 
-def setup_platform(hass, config, add_entities, discovery_info=None):
-    if discovery_info is None:
-        return
-    tion = hass.data[TION_API]
-    coordinator = hass.data[TION_COORDINATOR]
-    devices = []
-    for d in discovery_info:
-        objs = tion.get_devices(guid=d["guid"])
-        if not objs:
-            raise PlatformNotReady(f"Tion: устройство {d['guid']} не найдено")
-        obj = objs[0]
-        coordinator.register(obj)
+async def async_setup_entry(hass, entry, async_add_entities):
+    data = hass.data[DOMAIN][entry.entry_id]
+    coordinator = data[DATA_COORDINATOR]
 
-        if d["type"] == MAGICAIR_DEVICE:
-            sensor_types = [CO2_SENSOR, TEMP_SENSOR, HUM_SENSOR]
-        elif d["type"] == BREEZER_DEVICE:
-            sensor_types = [TEMP_IN_SENSOR, TEMP_OUT_SENSOR, SPEED_SENSOR, FAN_STATE_SENSOR]
-        else:
-            continue
-
-        for st in sensor_types:
-            devices.append(TionSensor(coordinator, obj, st))
-    add_entities(devices)
+    entities = []
+    for magicair in coordinator.magicairs:
+        for st in (CO2_SENSOR, TEMP_SENSOR, HUM_SENSOR):
+            entities.append(TionSensor(coordinator, magicair, st))
+    for breezer in coordinator.breezers:
+        for st in (TEMP_IN_SENSOR, TEMP_OUT_SENSOR, SPEED_SENSOR, FAN_STATE_SENSOR):
+            entities.append(TionSensor(coordinator, breezer, st))
+    async_add_entities(entities)
 
 
 class TionSensor(CoordinatorEntity, SensorEntity):

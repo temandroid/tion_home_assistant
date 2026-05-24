@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Tion",
+        "description": "Enter your Tion / MagicAir cloud credentials.",
+        "data": {
+          "username": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "auth": "Authorization failed. Check email and password."
+    },
+    "abort": {
+      "already_configured": "This account is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tion options",
+        "data": {
+          "scan_interval": "Polling interval (seconds, 30-3600)",
+          "file_path": "Auth file path"
+        }
+      }
+    }
+  }
+}
