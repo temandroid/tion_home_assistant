@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.idea/
+.vscode/
+.DS_Store
+*.log
+*.swp
+.env
+
+# Tion OAuth token — никогда не коммитить!
+tion_auth

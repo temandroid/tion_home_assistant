@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.1.0] - 2026-05-24
+### Изменения
+#### Исправления по результатам code-review (CR-001..018, кроме CR-009/014)
+  - **CR-001:** `setup()` → `async_setup()` с `async_add_executor_job` — больше не блокирует event loop HA при авторизации и discovery.
+  - **CR-002:** Введён `DataUpdateCoordinator` — один периодический `.load()` на все устройства вместо N×HTTP per-entity. Сущности теперь `CoordinatorEntity`.
+  - **CR-003:** Убран `assert api.authorization` — возвращается `False` с понятным логом.
+  - **CR-004:** Если устройство/зона не найдены — `PlatformNotReady` вместо `IndexError`.
+  - **CR-005:** `set_preset_mode` переписан через декларативную таблицу `PRESETS` — нет копипасты веток.
+  - **CR-006:** `set_fan_mode(FAN_AUTO)` больше не сбрасывает `target_co2` в 600 — теперь target управляется только через preset (ECO/AWAY).
+  - **CR-007:** Preset восстанавливается после рестарта HA через `RestoreEntity`.
+  - **CR-008:** `manifest.codeowners` → `["@temandroid"]` (валидный формат для hassfest).
+  - **CR-010:** `fan_modes` — чистые строки, без миксов типов.
+  - **CR-011:** `unique_id` сенсора — стабильный ключ (`<guid>_<key>`) вместо конкатенации с именем (содержавшим пробел).
+  - **CR-012:** `fan_state` защищён от `speed is None`.
+  - **CR-013:** Добавлен `.gitignore` (особенно для `tion_auth` — OAuth-токена).
+  - **CR-015:** Runtime-проверка версии HA сведена к одному модульному флагу `_HA_GE_2024_2`.
+  - **CR-016:** `type(device) ==` → `isinstance` (поддержка наследников).
+  - **CR-017:** Логи в getter'ах → DEBUG (`preset_mode`); setter'ы — кратко и через `%s`-форматирование.
+  - **CR-018:** Маппинг `gate ↔ swing`/строка вынесен в модульные dict'ы.
+  - Bump манифеста с `documentation` и `issue_tracker` на `temandroid/tion_home_assistant`.
+
 ## [1.0.9] - 2024-02-13
 ### Изменения
   - Поправил код на соответствие новой версии НА, начиная с 2024.2

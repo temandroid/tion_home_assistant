@@ -1,125 +1,123 @@
-"""Platform for sensor integration."""
+"""Sensor platform: CO2/temp/humidity (MagicAir) и temp_in/out/speed/fan_state (бризер)."""
 import logging
-from homeassistant.components.sensor import (
-    SensorStateClass,
-    SensorEntity,
-)
 
+from homeassistant.components.sensor import SensorStateClass, SensorEntity
 from homeassistant.components.sensor import ATTR_STATE_CLASS as STATE_CLASS
 from homeassistant.const import UnitOfTemperature, STATE_UNKNOWN
-from tion import MagicAir
+from homeassistant.exceptions import PlatformNotReady
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from . import (
+    TION_API, TION_COORDINATOR,
+    BREEZER_DEVICE, MAGICAIR_DEVICE,
+    CO2_PPM, HUM_PERCENT,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
-from . import TION_API, BREEZER_DEVICE, MAGICAIR_DEVICE, CO2_PPM, HUM_PERCENT
-
-# Sensor types
+# Описания сенсоров. `key` — стабильный идентификатор для unique_id (не меняется!).
 CO2_SENSOR = {
-    "unit": CO2_PPM,
-    "name": "co2",
+    "key": "co2", "name": "co2", "unit": CO2_PPM,
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 TEMP_SENSOR = {
-    "unit": UnitOfTemperature.CELSIUS,
-    "name": "temperature",
+    "key": "temperature", "name": "temperature", "unit": UnitOfTemperature.CELSIUS,
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 HUM_SENSOR = {
-    "unit": HUM_PERCENT,
-    "name": "humidity",
+    "key": "humidity", "name": "humidity", "unit": HUM_PERCENT,
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 TEMP_IN_SENSOR = {
-    "unit": UnitOfTemperature.CELSIUS,
-    "name": "temperature in",
+    "key": "temperature_in", "name": "temperature in", "unit": UnitOfTemperature.CELSIUS,
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 TEMP_OUT_SENSOR = {
-    "unit": UnitOfTemperature.CELSIUS,
-    "name": "temperature out",
+    "key": "temperature_out", "name": "temperature out", "unit": UnitOfTemperature.CELSIUS,
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 SPEED_SENSOR = {
-    "unit": "",
-    "name": "speed",
+    "key": "speed", "name": "speed", "unit": "",
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 FAN_STATE_SENSOR = {
-    "name": "fan state",
+    "key": "fan_state", "name": "fan state",
     STATE_CLASS: None,
 }
 
 
 def setup_platform(hass, config, add_entities, discovery_info=None):
-    """Set up the sensor platform."""
-    tion = hass.data[TION_API]
     if discovery_info is None:
         return
+    tion = hass.data[TION_API]
+    coordinator = hass.data[TION_COORDINATOR]
     devices = []
-    for device in discovery_info:
-        if device["type"] == MAGICAIR_DEVICE:
-            devices.append(TionSensor(tion, device["guid"], CO2_SENSOR))
-            devices.append(TionSensor(tion, device["guid"], TEMP_SENSOR))
-            devices.append(TionSensor(tion, device["guid"], HUM_SENSOR))
-        elif device["type"] == BREEZER_DEVICE:
-            devices.append(TionSensor(tion, device["guid"], TEMP_IN_SENSOR))
-            devices.append(TionSensor(tion, device["guid"], TEMP_OUT_SENSOR))
-            devices.append(TionSensor(tion, device["guid"], SPEED_SENSOR))
-            devices.append(TionSensor(tion, device["guid"], FAN_STATE_SENSOR))
+    for d in discovery_info:
+        objs = tion.get_devices(guid=d["guid"])
+        if not objs:
+            raise PlatformNotReady(f"Tion: устройство {d['guid']} не найдено")
+        obj = objs[0]
+        coordinator.register(obj)
+
+        if d["type"] == MAGICAIR_DEVICE:
+            sensor_types = [CO2_SENSOR, TEMP_SENSOR, HUM_SENSOR]
+        elif d["type"] == BREEZER_DEVICE:
+            sensor_types = [TEMP_IN_SENSOR, TEMP_OUT_SENSOR, SPEED_SENSOR, FAN_STATE_SENSOR]
+        else:
+            continue
+
+        for st in sensor_types:
+            devices.append(TionSensor(coordinator, obj, st))
     add_entities(devices)
 
 
-class TionSensor(SensorEntity):
-    """Representation of a Sensor."""
+class TionSensor(CoordinatorEntity, SensorEntity):
 
-    def __init__(self, tion, guid, sensor_type):
-        self._device = tion.get_devices(guid=guid)[0]
+    def __init__(self, coordinator, device, sensor_type):
+        super().__init__(coordinator)
+        self._device = device
         self._sensor_type = sensor_type
 
     @property
     def unique_id(self):
-        """Return a unique id identifying the entity."""
-        return self._device.guid + self._sensor_type["name"]
+        return f"{self._device.guid}_{self._sensor_type['key']}"
 
     @property
     def name(self):
-        """Return the name of the sensor."""
         return f"{self._device.name} {self._sensor_type['name']}"
 
     @property
     def state(self):
-        """Return the state of the sensor."""
-        state = STATE_UNKNOWN
-        if self._sensor_type == CO2_SENSOR:
-            state = self._device.co2
-        elif self._sensor_type == TEMP_SENSOR:
-            state = self._device.temperature
-        elif self._sensor_type == HUM_SENSOR:
-            state = self._device.humidity
-        elif self._sensor_type == TEMP_IN_SENSOR:
-            state = self._device.t_in
-        elif self._sensor_type == TEMP_OUT_SENSOR:
-            state = self._device.t_out
-        elif self._sensor_type == SPEED_SENSOR:
-            state = self._device.speed
-        elif self._sensor_type == FAN_STATE_SENSOR:
-            state = 'on' if self._device.speed > 0 else 'off'
-        return state if self._device.valid else STATE_UNKNOWN
+        if not self._device.valid:
+            return STATE_UNKNOWN
+        key = self._sensor_type["key"]
+        if key == "co2":
+            return self._device.co2
+        if key == "temperature":
+            return self._device.temperature
+        if key == "humidity":
+            return self._device.humidity
+        if key == "temperature_in":
+            return self._device.t_in
+        if key == "temperature_out":
+            return self._device.t_out
+        if key == "speed":
+            return self._device.speed
+        if key == "fan_state":
+            speed = self._device.speed or 0
+            return "on" if speed > 0 else "off"
+        return STATE_UNKNOWN
 
     @property
     def unit_of_measurement(self):
-        """Return the unit of measurement."""
-        if self._sensor_type["name"] == "fan state":
+        if self._sensor_type["key"] == "fan_state":
             return None
-        return self._sensor_type["unit"] if self._device.valid else None
+        return self._sensor_type.get("unit") if self._device.valid else None
 
     @property
     def state_class(self):
-        """Return sensor state class"""
         return self._sensor_type[STATE_CLASS] if self._device.valid else None
 
-    def update(self):
-        """Fetch new state data for the sensor.
-        This is the only method that should fetch new data for Home Assistant.
-        """
-        self._device.load()
+    @property
+    def available(self) -> bool:
+        return self._device.valid
