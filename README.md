@@ -6,6 +6,10 @@
 Интеграция обеспечивает управление бризерами Tion, а также чтение показаний датчиков (включая датчики MagicAir) из системы умного дома Home Assistant. Основано на пакете [tion](https://github.com/airens/tion).
 
 *Внимание: для работы требуется шлюз MagicAir!*
+
+> **Для Tion Breezer Bio X (новая модель с Wi-Fi, приложение "Tion Smart") эта интеграция НЕ подходит.**
+> Bio X использует Tuya-стек, а не облако MagicAir. Инструкция по подключению Bio X к HA через
+> `tuya-local` — в [docs/bio_x.md](docs/bio_x.md) (готовый YAML-конфиг внутри).
 ## Установка
 ### HACS:
 1. HACS->Settings->Custom repositories 

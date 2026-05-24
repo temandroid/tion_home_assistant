@@ -1,119 +1,121 @@
 #!/usr/bin/env python3
-"""Отладка авторизации в облаке Tion.
+"""Отладка авторизации в облаке Tion (расширенная).
 
-Использование:
-    pip install requests
-    python debug_auth.py you@mail.com 'your_password'
+ВАЖНО: чтобы пароль точно не пострадал от shell-эскейпа, читаем его из файла.
+    echo -n 'мой_пароль' > /tmp/tion_pass
+    python debug_auth.py you@mail.com /tmp/tion_pass
 
-Скрипт делает ровно то же, что пакет `tion`, но:
-  - печатает HTTP-статус и тело ответа
-  - пробует несколько User-Agent (мобильное приложение vs дефолтный requests)
-  - пробует альтернативные endpoint'ы (api2 vs api3)
-  - подсказывает по коду ошибки
+Или для разового запуска (если уверены, что shell не съест символы):
+    python debug_auth.py you@mail.com --inline 'мой_пароль'
 
-Если все попытки 400/invalid_client — нужно перехватить запрос актуального
-мобильного приложения MagicAir (HTTP Toolkit / mitmproxy) и достать новый
-client_id/secret.
+Скрипт пробует разные варианты OAuth-запроса:
+  - User-Agent'ы
+  - scope'ы (без / openid / magicair / offline_access)
+  - client credentials в body vs Basic Authorization header
+  - Content-Type variants
 """
 import sys
 import json
+import base64
 import requests
 
-# Из tion 1.28
-CLIENT_ID_LEGACY = "cd594955-f5ba-4c20-9583-5990bb29f4ef"
-CLIENT_SECRET_LEGACY = "syRxSrT77P"
+CLIENT_ID = "cd594955-f5ba-4c20-9583-5990bb29f4ef"
+CLIENT_SECRET = "syRxSrT77P"
+URL = "https://api2.magicair.tion.ru/idsrv/oauth2/token"
 
-ENDPOINTS = [
-    "https://api2.magicair.tion.ru/idsrv/oauth2/token",
-    "https://api3.magicair.tion.ru/idsrv/oauth2/token",
-    "https://api.magicair.tion.ru/idsrv/oauth2/token",
-]
+SCOPES = [None, "magicair", "openid", "openid offline_access", "openid profile email"]
 
 USER_AGENTS = [
-    ("default-requests", None),
-    ("magicair-android", "MagicAir/3.0 (Android)"),
-    ("magicair-ios", "MagicAir/3.0 (iOS)"),
-    ("okhttp", "okhttp/4.9.3"),
+    None,
+    "MagicAir/3.0 (Android)",
+    "okhttp/4.9.3",
+    "MagicAir/1.10.0 (com.tion.magicair; build:1; iOS 17.0.0) Alamofire/5.6.4",
 ]
 
+CLIENT_AUTH_MODES = ["body", "basic"]
 
-def try_auth(email: str, password: str, url: str, ua: str | None):
+
+def attempt(email: str, password: str, scope: str | None, ua: str | None, mode: str):
     data = {
         "username": email,
         "password": password,
-        "client_id": CLIENT_ID_LEGACY,
-        "client_secret": CLIENT_SECRET_LEGACY,
         "grant_type": "password",
     }
-    headers = {}
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+    if scope is not None:
+        data["scope"] = scope
     if ua:
         headers["User-Agent"] = ua
 
-    print(f"\n>>> POST {url}")
-    print(f"    User-Agent: {ua or '(default)'}")
-    try:
-        r = requests.post(url, data=data, headers=headers, timeout=15)
-    except requests.exceptions.RequestException as e:
-        print(f"    NETWORK ERROR: {e}")
-        return None
+    if mode == "basic":
+        token = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
+        headers["Authorization"] = f"Basic {token}"
+    else:  # body
+        data["client_id"] = CLIENT_ID
+        data["client_secret"] = CLIENT_SECRET
 
-    print(f"    status: {r.status_code}")
-    print(f"    headers: {dict(r.headers)}")
-    body = r.text[:1500]
-    print(f"    body: {body}")
+    label = f"scope={scope!r} ua={(ua or 'default')[:30]!r} mode={mode}"
+    try:
+        r = requests.post(URL, data=data, headers=headers, timeout=15)
+    except requests.exceptions.RequestException as e:
+        print(f"[NET ] {label} -> {e}")
+        return False
 
     if r.status_code == 200:
-        try:
-            js = r.json()
-            print(f"    >>> SUCCESS! token_type={js.get('token_type')}, expires_in={js.get('expires_in')}")
-            return js
-        except Exception as e:
-            print(f"    !!! 200 OK но не JSON: {e}")
-            return None
+        print(f"[ OK ] {label}")
+        print(f"       body: {r.text[:300]}")
+        return True
 
-    # подсказки
-    try:
-        err = r.json()
-        code = err.get("error") or err.get("Message") or err.get("error_description")
-        hint = {
-            "invalid_client": "Облако сменило client_id/secret. Нужно перехватить запрос актуального мобильного приложения.",
-            "invalid_grant": "Логин/пароль не приняты, либо grant_type 'password' депрекейтнут (см. PKCE).",
-            "unsupported_grant_type": "Перешли на code-flow с PKCE. Нужно переписывать auth полностью.",
-            "invalid_request": "Сменился формат запроса (поля отличаются).",
-            "unauthorized_client": "client_id заблокирован для этого grant_type.",
-        }.get(code, "")
-        if hint:
-            print(f"    >>> Подсказка: {hint}")
-    except Exception:
-        if "<html" in body.lower():
-            print("    >>> Подсказка: вернулся HTML (вероятно Cloudflare/captcha). Попробовать User-Agent мобильного приложения.")
-
-    return None
+    short_body = r.text[:200].replace("\n", " ")
+    print(f"[{r.status_code:>3}] {label}")
+    print(f"       body: {short_body}")
+    return False
 
 
 def main():
-    if len(sys.argv) != 3:
-        print("Usage: python debug_auth.py <email> <password>")
+    if len(sys.argv) < 3:
+        print(__doc__)
         sys.exit(1)
-    email, password = sys.argv[1], sys.argv[2]
 
-    print(f"Тест авторизации Tion для {email!r}")
-    print(f"client_id (legacy): {CLIENT_ID_LEGACY}")
+    email = sys.argv[1]
+    if sys.argv[2] == "--inline":
+        if len(sys.argv) < 4:
+            print("Usage: ... --inline <password>")
+            sys.exit(1)
+        password = sys.argv[3]
+        print("[!] Пароль из argv — если есть спецсимволы, могло побиться shell'ом.")
+    else:
+        with open(sys.argv[2], "rb") as f:
+            password = f.read().decode("utf-8")
+        # уберём финальный \n если файл создан echo без -n
+        password = password.rstrip("\r\n")
+        print(f"[i] Пароль из файла {sys.argv[2]}, длина={len(password)} байт.")
+        print(f"    Первые 2 символа: {password[:2]!r}, последние 2: {password[-2:]!r}")
 
-    for url in ENDPOINTS:
-        for ua_name, ua in USER_AGENTS:
-            result = try_auth(email, password, url, ua)
-            if result:
-                print("\n=== Успех ===")
-                print(json.dumps(result, indent=2, ensure_ascii=False))
-                return
+    print(f"[i] Email: {email!r}")
+    print(f"[i] URL: {URL}")
+    print(f"[i] client_id: {CLIENT_ID}")
+    print()
 
-    print("\n=== Все попытки провалились ===")
-    print("Следующие шаги:")
-    print("  1. Поставь HTTP Toolkit (https://httptoolkit.com/) на телефон.")
-    print("  2. Открой приложение MagicAir, залогинься.")
-    print("  3. Скопируй POST-запрос на endpoint вида /idsrv/oauth2/token (или новый).")
-    print("  4. Вставь актуальные client_id/secret/URL в этот скрипт и проверь.")
+    success = False
+    for scope in SCOPES:
+        for ua in USER_AGENTS:
+            for mode in CLIENT_AUTH_MODES:
+                if attempt(email, password, scope, ua, mode):
+                    success = True
+                    print("\n=== УСПЕХ ===")
+                    print(f"Рабочая комбинация: scope={scope!r}, ua={ua!r}, mode={mode!r}")
+                    return
+
+    if not success:
+        print("\n=== Все попытки провалились ===")
+        print()
+        print("Если в приложении MagicAir вход работает теми же кредами —")
+        print("значит либо в пароле есть символы, которые искажаются (проверь")
+        print("длину выше: совпадает ли с реальной?), либо приложение шлёт")
+        print("какие-то дополнительные поля. Следующий шаг — посмотреть HAR")
+        print("с веб-кабинета https://magicair.tion.ru (DevTools → Network).")
 
 
 if __name__ == "__main__":
