@@ -5,237 +5,95 @@
 > которые работают через шлюз MagicAir — для них основная интеграция этого репо.
 
 Покрывает:
-- **Tion 4S** с USB-модулем интеграции Wi-Fi (вышел в феврале 2026) — стартер-конфиг ниже
+- **Tion 4S** с USB-модулем интеграции Wi-Fi (вышел в феврале 2026)
 - **Tion 4S TS** (со встроенным Tuya-модулем)
-- **Tion Breezer Bio X** — готовый конфиг [tion_bio_x_tuya_local.yaml](./tion_bio_x_tuya_local.yaml)
-
-Подход одинаковый — `make-all/tuya-local` + device YAML.
+- **Tion Breezer Bio X**
 
 ---
 
-## Общие шаги
+## Путь 1 (рекомендуется) — через Яндекс.Алису
 
-### 1. Поставить `tuya-local` (`make-all/tuya-local`)
+Самый рабочий способ на сегодня. Бризер уже подключается к Алисе через навык
+**Smart Life** (Tuya OEM-skill). Дальше через HACS-интеграцию пробрасываем
+устройства из Алисы в HA.
 
-HACS → Integrations → правый верх три точки → **Custom repositories**:
-- Repository: `make-all/tuya-local`
-- Category: `Integration`
-→ Add → найти **Local Tuya** в списке → Download → перезапустить HA.
+**Плюсы:** работает без танцев с Tuya developer-аккаунтом, не нужен
+factory reset бризера, не теряется Tion Smart-приложение.
 
-### 2. Получить `device_id`, `local_key`, `product_id`
+**Минусы:** команды идут через облако Яндекса — лаг 0.5-1 с, зависимость
+от интернета и от работоспособности Алисы.
 
-Один раз — нужен Tuya IoT developer-аккаунт (бесплатный).
+### Шаг 1. Привязать бризер в Алисе через Smart Life
 
-#### Вариант A: `tinytuya wizard` (быстрее)
+В приложении **Дом с Алисой** или **Яндекс**:
 
-```bash
-pip install tinytuya
-python -m tinytuya wizard
-```
+1. Устройства → `+` → Производитель → **Smart Life**
+2. Войти **тем же email/паролем, что в Tion Smart** — Smart Life и Tion Smart
+   делят базу Tuya-аккаунтов, навык подхватит бризер автоматически.
+3. После авторизации в списке выбрать бризер → готово, он появился в Алисе.
 
-Пройти шаги — в результате получишь `devices.json` со всеми Tuya-устройствами
-твоего аккаунта Tion Smart: ip, device_id, local_key, **product_id**.
+### Шаг 2. Поставить интеграцию в HA
 
-#### Вариант B: вручную через iot.tuya.com
+Конкретный HACS-репозиторий уточним под твою задачу — есть два класса:
 
-1. https://iot.tuya.com → регистрация Developer → **Cloud → Create Cloud Project**
-   (Industry: Smart Home, Method: Smart Home PaaS, Data Center: Central Europe / India)
-2. Внутри проекта → **Devices → Link Tuya App Account → Add App Account →
-   отсканировать QR из Tion Smart** (Profile → ... → Scan)
-3. Devices → выбрать бризер → скопировать `Device ID` и `Local Key`.
-4. Product ID видно в той же карточке устройства.
+| Направление | Что делает | Пакет |
+|---|---|---|
+| **Yandex → HA** | Достать устройства из Алисы и показать в HA как entity'и | требует подбора (см. ниже) |
+| HA → Yandex | Отдать устройства из HA в Алису (наоборот) | `dext0r/yandex_smart_home` (не подходит сейчас) |
 
-### 3. Найти IP бризера
+Для нашей задачи (Yandex → HA) сейчас в комьюнити живёт несколько форков —
+выбираем под текущее состояние HA после того, как ты подтвердишь, что хочешь
+этим путём идти.
 
-В админке роутера → DHCP clients → найти по MAC. Зарезервировать IP за MAC.
+### Шаг 3. Настройка
 
-### 4. Поставить device YAML в HA
+После установки HACS-интеграции — авторизация через OAuth Яндекса
+(одноразовый код, как для большинства облачных интеграций). Бризер появится
+как набор entity'ей: `switch.tion_4s_power`, `number.tion_4s_speed`,
+`sensor.tion_4s_temperature` и т.д.
 
-Скопировать соответствующий файл в:
-```
-<HA config>/custom_components/tuya_local/devices/<имя>.yaml
-```
-
-- Для **Bio X**: [tion_bio_x_tuya_local.yaml](./tion_bio_x_tuya_local.yaml) → `tion_breezer_bio_x.yaml`
-- Для **4S**: см. ниже — нужно сделать на основе реальных DPS твоего модуля
-
-Перезапустить HA.
-
-### 5. Добавить устройство в HA
-
-**Settings → Devices & Services → Add Integration → Local Tuya → Add a new device**:
-
-| Поле | Значение |
-|---|---|
-| Friendly name | `Tion 4S` (или `Tion Bio X`) |
-| Host | IP из шага 3 |
-| Device ID | из шага 2 |
-| Local key | из шага 2 |
-| Protocol version | `3.3` (если не работает — `3.4`) |
-| Scan interval | 30 |
-
-После — HA должен подцепить шаблон по `product_id` и создать entity'и.
+> **Когда будем настраивать — подберу актуальный HACS-репозиторий и
+> распишу пошагово.** Сейчас зафиксируем только что путь рабочий.
 
 ---
 
-## Tion 4S USB Wi-Fi — как сделать YAML
+## Путь 2 — Local Tuya (отложено)
 
-Готового конфига нет, но есть рабочий путь.
+Дать HA прямой локальный канал к бризеру по TCP (порт 6668, AES-зашифровано
+`local_key`). Полностью offline, нулевой лаг, не зависит от облаков.
 
-### Шаг 1: достать сырые DPS
+**Но:** требует получить `local_key` устройства. На сегодня это упирается в
+авторизацию на Tuya IoT Platform (iot.tuya.com), которая у тебя не проходит
+из-за нестабильного QR-кода при привязке app account.
 
-После шага 2 общей инструкции у тебя есть `device_id` и `local_key`.
-Запросить актуальное состояние всех DPS:
+**Текущий статус:** способы получения `local_key` без iot.tuya.com
+(`@tuyapi/cli link` через factory reset, перехват при сопряжении, и т.п.) —
+прорабатываются. К этому варианту вернёмся позже.
 
-```bash
-python -m tinytuya scan        # IP и product_id, если ещё не знаешь
-```
+Что уже выяснено и сохранено для будущих шагов:
+- product_id бризера: `rllylqfcd3lfe3s3`
+- device_id: `bf7af32b6fa1a72391lqy6`
+- IP: `192.168.254.153`
+- protocol version: `3.5`
+- DC аккаунта Tion Smart: **Central Europe** (в China DC аккаунт не пускает)
 
-Затем точечно по устройству:
+YAML-конфиг под `make-all/tuya-local` для бризера 4S ещё нужно собрать (нет
+готового в upstream). Конфиг для **Bio X** уже есть:
+[tion_bio_x_tuya_local.yaml](./tion_bio_x_tuya_local.yaml).
 
-```python
-import tinytuya, json
-d = tinytuya.OutletDevice('DEVICE_ID', 'IP', 'LOCAL_KEY')
-d.set_version(3.3)             # или 3.4
-print(json.dumps(d.status(), indent=2))
-```
+---
 
-Получишь что-то вида:
-```json
-{
-  "dps": {
-    "101": true,           // power
-    "102": 2,              // speed
-    "103": false,          // sound
-    "105": false,          // recirculation/heater enabled
-    "106": 800,            // co2 (?)
-    "108": 22,             // indoor/outdoor temp
-    "114": 18,             // target heater temp
-    "115": 87,             // filter life %
-    ...
-  }
-}
-```
+## Путь 3 — официальная Tuya integration HA (запасной)
 
-### Шаг 2: пощёлкать кнопки в приложении и записать что меняется
+Самый простой по настройке, но **функционально слабее**: на момент мая 2026
+штатная Tuya-интеграция показывает не все DPS бризера красивыми entity'ями
+(см. [issue #149874](https://github.com/home-assistant/core/issues/149874)).
+Управление базовое работает, но детальной телеметрии не получится.
 
-В Tion Smart на телефоне — менять скорость, температуру, гейт, режим — и
-каждый раз снимать `d.status()`. Записать, какой dps id за что отвечает.
+Settings → Devices & Services → Add Integration → **Tuya** → войти аккаунтом
+Tion Smart (через тот же Smart Life-навык).
 
-> У 4S заведомо **нет**: PM2.5, влажности, цветной панели, calibrate CO2.
-> CO2 — только если подключён MagicAir (но если у тебя MagicAir, ты бы
-> использовал основную интеграцию, не Tuya).
-
-### Шаг 3: стартер-YAML на основе Bio X (минус то, чего нет в 4S)
-
-Создать в HA как `custom_components/tuya_local/devices/tion_breezer_4s.yaml`:
-
-```yaml
-name: Tion 4S
-products:
-  - id: ЗАМЕНИ_НА_СВОЙ_PRODUCT_ID    # из tinytuya wizard
-    manufacturer: Tion
-    model: Breezer 4S
-entities:
-  - entity: switch
-    name: "Power"
-    icon: "mdi:power"
-    dps:
-      - id: 101
-        name: switch
-        type: boolean
-  - entity: number
-    name: "Speed"
-    icon: "mdi:fan"
-    dps:
-      - id: 102
-        name: value
-        type: integer
-        range:
-          min: 0
-          max: 6                       # у 4S 0-6 (у Bio X 1-7)
-  - entity: number
-    name: "Target heater"
-    icon: "mdi:thermometer-plus"
-    dps:
-      - id: 114
-        name: value
-        type: integer
-        unit: C
-        range:
-          min: 0
-          max: 30
-  - entity: switch
-    name: "Heater enabled"
-    icon: "mdi:radiator"
-    dps:
-      - id: 105                        # ПРОВЕРИТЬ: 105 у Bio X = recirc, у 4S возможно heater
-        name: switch
-        type: boolean
-  - entity: sensor
-    name: "Indoor temperature"
-    class: temperature
-    dps:
-      - id: 108
-        name: sensor
-        type: integer
-        unit: "°C"
-  - entity: sensor
-    name: "Outdoor temperature"
-    class: temperature
-    dps:
-      - id: 112                        # ПРОВЕРИТЬ
-        name: sensor
-        type: integer
-        unit: "°C"
-  - entity: sensor
-    name: "Filter life"
-    icon: "mdi:air-filter"
-    dps:
-      - id: 115
-        name: sensor
-        type: integer
-        unit: "%"
-  - entity: switch
-    name: "Sound"
-    category: config
-    icon: "mdi:volume-high"
-    dps:
-      - id: 103
-        name: switch
-        type: boolean
-  - entity: light
-    name: "Indicator light"
-    category: config
-    dps:
-      - id: 104
-        name: brightness
-        type: string
-        mapping:
-          - dps_val: "0"
-            value: 0
-          - dps_val: "50"
-            value: 128
-          - dps_val: "100"
-            value: 255
-
-# TODO ниже — пощёлкать и понять, что соответствует:
-# - выбор источника воздуха (улица / квартира / смешанный) — какой DPS меняется?
-#   возможно отдельный switch, возможно select с тремя значениями
-# - режим (manual / auto) — если нет MagicAir, auto может вообще отсутствовать
-# - sleep / boost пресеты — если в приложении есть кнопки, должны быть DPS
-```
-
-### Шаг 4: проверить через HA
-
-Перезапустить HA → добавить устройство → если в логах
-`Device matches tion_breezer_4s with quality of 100%` — твой YAML маппится
-правильно. Если меньше (например 60%) — какие-то DPS лишние или отсутствуют.
-
-### Шаг 5 (опционально): отправить в upstream
-
-Если работает — отправь PR в [`make-all/tuya-local`](https://github.com/make-all/tuya-local).
-Issue #4853 как раз ждёт чьего-нибудь рабочего конфига.
+Если Путь 1 не выйдет настроить — попробовать как fallback.
 
 ---
 
@@ -243,14 +101,6 @@ Issue #4853 как раз ждёт чьего-нибудь рабочего ко
 
 | Симптом | Что проверить |
 |---|---|
-| `Device matches xxx with quality of N%` в логах | YAML-файл не скопирован / `product_id` не совпадает / DPS не маппятся |
-| Connection refused / timeout | Бризер не в той же подсети что HA; firewall блокирует TCP 6668 |
-| Wrong protocol version | Перебрать `3.3` → `3.4` → `3.2` |
-| `Invalid local_key` | Перепарь устройство в Tion Smart — `local_key` меняется при сопряжении. Перевытащи через iot.tuya.com / tinytuya |
-| Entity'и появляются, но не реагируют | Tuya разрешает только одну активную сессию. Закрой приложение Tion Smart на телефоне — оно держит соединение |
-| Управление работает с лагами | Уменьши scan_interval, проверь Wi-Fi-канал бризера |
-
-## Альтернатива: официальная Tuya integration HA
-
-Если возиться не хочется — `Settings → Add Integration → Tuya` → войти аккаунтом Tion Smart.
-Cloud-only, может не маппить все параметры красиво, но управление будет.
+| Алиса не находит бризер в навыке Smart Life | DC аккаунта (Central Europe), переавторизовать навык |
+| Команды из HA в Алисе срабатывают с задержкой >2 с | Облако Яндекса. Без vpn / прокси. Norm 0.5-1 с |
+| Запоздалые состояния (бризер выключили вручную — HA не знает) | Pull-интервал у `yandex_smart_home`-фолков обычно 30 с, понизить нельзя |

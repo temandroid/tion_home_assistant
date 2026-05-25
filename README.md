@@ -10,9 +10,9 @@
 > **Для бризеров с Wi-Fi через приложение Tion Smart эта интеграция НЕ подходит.**
 > Это касается Tion 4S с USB-модулем Wi-Fi (вышел в фев 2026), 4S TS со встроенным
 > модулем, а также Breezer Bio X. Они используют Tuya-стек, а не MagicAir.
-> Инструкция по подключению через `tuya-local` — в [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md).
-> Готовый YAML для Bio X: [docs/tion_bio_x_tuya_local.yaml](docs/tion_bio_x_tuya_local.yaml).
-> Для 4S — стартер-конфиг в той же инструкции (требует подгонки под реальные DPS).
+> Рекомендуемый путь сейчас — **через навык Smart Life в Алисе + HACS-интеграция Yandex → HA**.
+> Подробнее: [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md). Альтернативный путь через
+> локальный канал (`tuya-local`) пока в проработке — нужно решить вопрос с `local_key`.
 ## Установка
 ### HACS:
 1. HACS->Settings->Custom repositories 
