@@ -14,20 +14,12 @@ from .const import (
     DOMAIN,
     DATA_API,
     DATA_COORDINATOR,
-    MAGICAIR_DEVICE,
-    BREEZER_DEVICE,
-    CO2_PPM,           # noqa: F401 — re-export для платформ (backward-compat)
-    HUM_PERCENT,       # noqa: F401
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_AUTH_FNAME,
     PLATFORMS,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Backward-compat re-exports — старый код платформ импортирует эти имена из пакета
-TION_API = DATA_API
-TION_COORDINATOR = DATA_COORDINATOR
 
 # YAML-конфиг (deprecated) — импортируется в config entry.
 CONFIG_SCHEMA = vol.Schema(
@@ -119,7 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return TionApi(
             username,
             password,
-            min_update_interval_sec=scan_interval.seconds,
+            min_update_interval_sec=int(scan_interval.total_seconds()),  # CR-020
             auth_fname=auth_fname,
         )
 

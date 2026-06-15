@@ -3,14 +3,11 @@ import logging
 
 from homeassistant.components.sensor import SensorStateClass, SensorEntity
 from homeassistant.components.sensor import ATTR_STATE_CLASS as STATE_CLASS
-from homeassistant.const import UnitOfTemperature, STATE_UNKNOWN
+from homeassistant.const import UnitOfTemperature
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    DOMAIN, DATA_API, DATA_COORDINATOR,
-    BREEZER_DEVICE, MAGICAIR_DEVICE,
-    CO2_PPM, HUM_PERCENT,
-)
+from .const import DOMAIN, DATA_COORDINATOR, CO2_PPM, HUM_PERCENT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,18 +33,17 @@ TEMP_OUT_SENSOR = {
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 SPEED_SENSOR = {
-    "key": "speed", "name": "speed", "unit": "",
+    "key": "speed", "name": "speed", "unit": None,
     STATE_CLASS: SensorStateClass.MEASUREMENT,
 }
 FAN_STATE_SENSOR = {
-    "key": "fan_state", "name": "fan state",
+    "key": "fan_state", "name": "fan state", "unit": None,
     STATE_CLASS: None,
 }
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data[DATA_COORDINATOR]
+    coordinator = hass.data[DOMAIN][entry.entry_id][DATA_COORDINATOR]
 
     entities = []
     for magicair in coordinator.magicairs:
@@ -75,9 +71,19 @@ class TionSensor(CoordinatorEntity, SensorEntity):
         return f"{self._device.name} {self._sensor_type['name']}"
 
     @property
-    def state(self):
+    def device_info(self) -> DeviceInfo:
+        """CR-022: привязка сенсора к устройству (бризер/MagicAir)."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._device.guid)},
+            name=self._device.name,
+            manufacturer="Tion",
+        )
+
+    @property
+    def native_value(self):
+        # CR-023/027: native_value, None при невалидности (не строка)
         if not self._device.valid:
-            return STATE_UNKNOWN
+            return None
         key = self._sensor_type["key"]
         if key == "co2":
             return self._device.co2
@@ -94,13 +100,11 @@ class TionSensor(CoordinatorEntity, SensorEntity):
         if key == "fan_state":
             speed = self._device.speed or 0
             return "on" if speed > 0 else "off"
-        return STATE_UNKNOWN
+        return None
 
     @property
-    def unit_of_measurement(self):
-        if self._sensor_type["key"] == "fan_state":
-            return None
-        return self._sensor_type.get("unit") if self._device.valid else None
+    def native_unit_of_measurement(self):
+        return self._sensor_type.get("unit")
 
     @property
     def state_class(self):

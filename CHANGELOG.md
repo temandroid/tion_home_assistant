@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.2.1] - 2026-05-24
+### Исправления (ревью №2 после рефакторинга, CR-019..030)
+  - **CR-019 (HIGH):** устранён рассинхрон объектов зоны. `get_zones()` создавал
+    второй инстанс `Zone`, отличный от `breezer.zone`: геттеры читали один объект,
+    сеттеры писали в другой → UI «залипал» после команд + зона грузилась дважды
+    за цикл. Теперь используется единый `breezer.zone`.
+  - **CR-020:** `scan_interval.seconds` → `int(scan_interval.total_seconds())`.
+  - **CR-021:** `OptionsFlow` больше не присваивает `self.config_entry`
+    (депрекейтнуто в HA 2024.11+) — хранит entry под приватным именем.
+  - **CR-022:** добавлен `device_info` — климат и сенсоры группируются в одно
+    устройство в HA UI.
+  - **CR-023:** числовые свойства возвращают `None` вместо строки `"unknown"`
+    при невалидном состоянии (убирает warning валидации HA).
+  - **CR-024:** после команд (`set_*`/`turn_*`) сразу `schedule_update_ha_state()` —
+    UI обновляется мгновенно, не дожидаясь периодического опроса.
+  - **CR-025:** `state_attributes` override → `extra_state_attributes`.
+  - **CR-026:** удалены мёртвые импорты и re-export (`BREEZER_DEVICE`, `CO2_PPM`,
+    `TION_API` и пр.).
+  - **CR-027:** сенсоры переведены на `native_value`/`native_unit_of_measurement`.
+  - **CR-030:** `"unit": ""` у speed-сенсора → `None`.
+
 ## [1.2.0] - 2026-05-24
 ### Изменения
 #### Миграция на config_flow (CR-009, CR-014)

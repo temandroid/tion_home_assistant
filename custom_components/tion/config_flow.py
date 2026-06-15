@@ -166,14 +166,16 @@ class TionConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class TionOptionsFlow(config_entries.OptionsFlow):
+    # CR-021: не присваиваем self.config_entry (в HA 2024.11+ это property базового
+    # класса, явное присваивание депрекейтнуто). Храним под приватным именем.
     def __init__(self, config_entry):
-        self.config_entry = config_entry
+        self._entry = config_entry
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        opts = self.config_entry.options
+        opts = self._entry.options
         schema = vol.Schema(
             {
                 vol.Optional(
