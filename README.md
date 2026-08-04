@@ -9,9 +9,10 @@ code-review. История изменений — в [CHANGELOG.md](CHANGELOG.m
 | Ваше устройство | Приложение | Путь |
 |---|---|---|
 | Бризер + шлюз **MagicAir** (S3/S4/4S/Lite через облако MagicAir) | MagicAir | **Эта интеграция** — см. ниже |
-| **4S с USB Wi-Fi модулем**, **4S TS**, **Bio X** — родное приложение должно работать | Tion Smart | **Алиса → HA** (AlexxIT/YandexStation) или local_key через iot.tuya.com — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
-| То же, но родное приложение не нужно | Tion Smart | Перепарка в Smart Life + tuya-local (форк old-atstec) — полностью локально, всё через UI |
-| Ворота/роллеты **ALUTECH Smart** (тоже Tuya) | ALUTECH Smart | Те же пути, что для Tion Smart — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
+| **4S с USB Wi-Fi модулем** / **4S TS** — нужно **локально**, приложение сохранить | Tion Smart | **BLE через ESP32** ([esphome-tion](https://github.com/dentra/esphome-tion)) — [docs/local_control.md](docs/local_control.md) |
+| Ворота/роллеты **ALUTECH** — нужно **локально**, приложение сохранить | ALUTECH Smart | **Shelly на сухих контактах** — [docs/local_control.md](docs/local_control.md) |
+| То же, но проще и можно через облако | Tion Smart / ALUTECH Smart | Алиса → HA (AlexxIT/YandexStation) — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
+| **Bio X** | Tion Smart | Tuya-пути — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
 
 ---
 
@@ -21,17 +22,19 @@ code-review. История изменений — в [CHANGELOG.md](CHANGELOG.m
 интеграция для них не подходит**. Выбор пути зависит от одного вопроса:
 **должно ли продолжать работать родное приложение?**
 
-- **Да, родное приложение нужно** → мост через Алису: устройства привязываются
-  к «Дому с Алисой» через навыки своих приложений, HACS-компонент
-  [`AlexxIT/YandexStation`](https://github.com/AlexxIT/YandexStation) импортирует
-  их в HA (колонка не обязательна). Либо, для локального управления —
-  local_key через developer-проект iot.tuya.com (OEM-аккаунт привязывается
-  read-only, устройства из приложений не пропадают).
-- **Нет, не нужно** → перепарка в Smart Life + форк `old-atstec/tuya-local`:
-  полностью локально, вся настройка через UI.
+**Локально + родное приложение работает** (рекомендуется) — заходить не через
+Tuya, а по второму, независимому каналу управления:
+- **Tion 4S** — по **BLE** через ESP32 и [`dentra/esphome-tion`](https://github.com/dentra/esphome-tion).
+  Wi-Fi модуль не трогаем, Tion Smart работает параллельно.
+- **Ворота ALUTECH** — реле **Shelly** на клеммы внешней кнопки привода.
+  Zigbee-хаб и приложение ALUTECH Smart не затрагиваются.
 
-Пошаговые инструкции по всем трём путям и troubleshooting:
-[docs/tion_smart_wifi.md](docs/tion_smart_wifi.md).
+Подробности: **[docs/local_control.md](docs/local_control.md)**.
+
+**Проще, но через облако** — привязать устройства к «Дому с Алисой» через навыки
+их приложений и импортировать в HA компонентом
+[`AlexxIT/YandexStation`](https://github.com/AlexxIT/YandexStation) (колонка не
+обязательна). Tuya-пути и Bio X: [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md).
 
 ---
 
