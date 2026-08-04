@@ -148,12 +148,14 @@ Google Play → `adb root`, либо LDPlayer), Tion Smart (`com.tion.tionsmart`
 
 ---
 
-## Путь 4 — локально через local_key
+## Путь 4 — локально через local_key (самый практичный при наличии Android Studio)
 
-Если удалённый доступ не критичен: добыть `local_key` (тем же рутованным
-эмулятором, но нужен только один секрет) → `make-all/tuya-local` в режиме
-**manual** или `xZetsubou/hass-localtuya` с галкой **`no_cloud`**: device_id,
-IP, local_key, protocol **3.5**.
+Если удалённый доступ не критичен: добыть `local_key` рутованным эмулятором
+(нужен только **один** секрет, а не вся схема подписи) → `make-all/tuya-local`
+в режиме **manual** или `xZetsubou/hass-localtuya` с галкой **`no_cloud`**:
+device_id, IP, local_key, protocol **3.5**.
+
+**Пошаговая инструкция под Android Studio:** [extract_local_key.md](./extract_local_key.md).
 
 Проверка ключа до настройки HA:
 ```bash
