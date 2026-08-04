@@ -11,23 +11,22 @@
 
 ---
 
-## Путь 1 (рекомендуется, актуально с августа 2026) — tuya-local с cloud-assisted setup
+## Путь 1 (рекомендуется, актуально с августа 2026) — форк tuya-local, всё через UI
 
-**Что изменилось:** современный `make-all/tuya-local` умеет **cloud-assisted
-setup** — авторизация по **user code + QR из приложения Smart Life**, БЕЗ
-developer-аккаунта на iot.tuya.com. `device_id` и `local_key` подтягиваются
-автоматически. Старый блокер (протухающий QR при «Link App Account» на
-iot.tuya.com) больше не актуален — этот шаг вообще не нужен.
+Никаких ручных YAML-файлов и developer-аккаунта Tuya:
 
-Плюс появился **проверенный на физическом устройстве YAML-конфиг для 4S**
-(product_id `rllylqfcd3lfe3s3`, protocol 3.5) — см.
-[tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml).
+- Форк **`old-atstec/tuya-local`** — это `make-all/tuya-local` со **встроенной
+  поддержкой TION Breezer 4S** (product_id `rllylqfcd3lfe3s3`, protocol 3.5,
+  DP проверены на физическом устройстве). Форк версионируется (2026.7.x)
+  и ставится через HACS.
+- **Cloud-assisted setup** в конфиг-флоу: авторизация по **user code + QR из
+  Smart Life** — `device_id` и `local_key` подтягиваются автоматически.
+  iot.tuya.com не нужен.
 
-> ⚠️ В upstream `make-all/tuya-local` конфиги Tion **не принимают** (мейнтейнер
-> отклонил PR [#5554](https://github.com/make-all/tuya-local/pull/5554) /
-> [#5561](https://github.com/make-all/tuya-local/pull/5561) по политическим
-> мотивам). Поэтому YAML ставится вручную. Живой форк с конфигом:
-> `old-atstec/tuya-local`.
+> Почему форк: мейнтейнер upstream отклонил PR с поддержкой Tion
+> ([#5554](https://github.com/make-all/tuya-local/pull/5554) /
+> [#5561](https://github.com/make-all/tuya-local/pull/5561)) по политическим
+> мотивам — в `make-all/tuya-local` конфиг не появится.
 
 **Что получится (entity'и для 4S):**
 - `climate` — off / heat / fan_only, скорости 1–6, целевая и текущая температура, hvac_action (heating/idle)
@@ -37,43 +36,40 @@ iot.tuya.com) больше не актуален — этот шаг вообщ�
 
 (CO2 у 4S нет — датчик CO2 живёт в MagicAir, а это другая экосистема.)
 
-### Шаг 1. Установить tuya-local
+### Шаг 1. Установить форк tuya-local
 
-HACS → Integrations → Custom repositories → `make-all/tuya-local`,
+HACS → Integrations → Custom repositories → `old-atstec/tuya-local`,
 Category: Integration → Download → перезапуск HA.
 
-### Шаг 2. Положить YAML-конфиг 4S
+> Если уже стоит `make-all/tuya-local` — удалить его сначала, две копии
+> tuya_local конфликтуют.
 
-Скопировать [tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml) в:
-
-```
-<HA config>/custom_components/tuya_local/devices/tion_breezer_4s.yaml
-```
-
-Ещё раз перезапустить HA.
-
-### Шаг 3. Получить user code в Smart Life
+### Шаг 2. Получить user code в Smart Life
 
 1. Поставить приложение **Smart Life** (если ещё нет) и войти **теми же
    email/паролем, что в Tion Smart** — базы аккаунтов общие.
 2. Smart Life → **Settings → Account and Security → User Code** — записать код.
 
-### Шаг 4. Добавить устройство в HA
+### Шаг 3. Добавить устройство в HA
 
 **Settings → Devices & Services → Add Integration → Tuya Local**:
 
 1. Выбрать **cloud-assisted setup**.
-2. Ввести **user code** из шага 3 → HA покажет QR.
+2. Ввести **user code** из шага 2 → HA покажет QR.
 3. Отсканировать QR **приложением Smart Life** (Me → иконка сканера).
 4. Выбрать бризер из списка устройств — `device_id`, `local_key`, IP и
    protocol (3.5) подставятся автоматически.
 5. tuya-local сматчит устройство с конфигом `TION Breezer 4S` по product_id.
 
-Если матчинг не сработал (в логах `Device matches ... with quality of N%` c
-чужим именем) — проверить, что YAML лежит в правильной папке и product_id
-в нём совпадает с фактическим.
-
 **Совет:** зарезервировать IP бризера за MAC в роутере, чтобы не менялся.
+
+### Bio X / если конфига нет в форке
+
+Для Bio X конфиг в форк не входит — положить
+[tion_bio_x_tuya_local.yaml](./tion_bio_x_tuya_local.yaml) вручную в
+`<HA config>/custom_components/tuya_local/devices/`. Копия конфига 4S на
+всякий случай тоже лежит рядом:
+[tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml).
 
 ---
 
