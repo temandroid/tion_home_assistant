@@ -24,9 +24,10 @@ YAML-файлов и без developer-аккаунта Tuya:
    (Integration) → установить **Tuya Local** → перезапустить HA.
    *Это форк `make-all/tuya-local` с встроенной поддержкой TION Breezer 4S
    (в upstream конфиг не принят).*
-2. Поставить приложение **Smart Life**, войти теми же email/паролем, что в
-   Tion Smart (базы общие). **Settings → Account and Security → User Code** —
-   записать код.
+2. **Перепарить бризер в приложение Smart Life** (user code от OEM-приложения
+   Tion Smart не принимается — схемы аккаунтов разные): удалить устройство в
+   Tion Smart → добавить в Smart Life через мастер сопряжения. Затем
+   Smart Life → **Settings → Account and Security → User Code** — записать код.
 3. **HA → Settings → Devices & Services → Add Integration → Tuya Local** →
    cloud-assisted setup → ввести user code → отсканировать QR приложением
    Smart Life → выбрать бризер. `device_id`/`local_key`/протокол подтянутся
