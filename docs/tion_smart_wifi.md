@@ -1,167 +1,197 @@
-# Бризеры Tion с Wi-Fi (приложение Tion Smart) → Home Assistant, локально
+# Бризеры Tion с Wi-Fi (приложение Tion Smart) → Home Assistant
 
 > Для бризеров на платформе **Tuya** (приложение **Tion Smart**): Tion 4S с
 > USB-модулем интеграции Wi-Fi, 4S TS, Bio X. Старые бризеры со шлюзом
 > MagicAir — не сюда, для них основная интеграция этого репозитория.
->
-> Цель этого документа — **локальное** управление по LAN, **не ломая** родное
-> приложение Tion Smart.
 
-Локальный протокол Tuya (TCP 6668) уже открыт на устройстве — `tinytuya scan`
-видит бризер. Не хватает единственного секрета — **`local_key`**. Вся задача
-сводится к тому, чтобы его добыть.
+Готовой интеграции «вставь email/пароль от Tion Smart» не существует ни в HACS,
+ни на GitHub. Ниже — разбор всех путей: что работает, что закрыто и почему.
 
 ---
 
-## Почему облачные пути НЕ работают (не тратьте время)
+## Почему стандартные пути закрыты
 
-Оба «простых» способа получить `local_key` через облако Tuya закрыты
-**архитектурно**, а не из-за настроек:
+**Tion Smart — OEM/white-label приложение Tuya.** Аккаунты Tuya живут в
+изолированных namespace'ах (app schema), у каждого OEM-приложения свой. Отсюда
+все ограничения:
 
-- **iot.tuya.com → Link Tuya App Account** (QR постоянно «expired»). Причина —
-  **не** таймаут, DC или часы. QR привязан к конкретному приложению, и
-  приложения не из allowlist Tuya при скане отклоняются с немедленной
-  инвалидацией сессии → страница пишет «QR code has expired». Ваш личный
-  Cloud Project в принципе **не может** слинковаться с чужим OEM-приложением
-  (Tion Smart) — вкладка Link App Account рассчитана только на Smart Life /
-  Tuya Smart. *(Официальная дока Tuya «QR Code-Based Login Authorization»:
-  «the app… must be included in the allowlist. Otherwise, an error message is
-  returned and the session expires».)*
+| Путь | Почему не работает |
+|---|---|
+| `iot.tuya.com` → **Link Tuya App Account** (QR «expired») | Allowlist Tuya: личный Cloud Project линкуется только со Smart Life / Tuya Smart. «QR expired» — это и есть отказ allowlist, а **не** таймаут, DC или часы |
+| **user code / cloud-assisted** в штатной Tuya-интеграции и tuya-local | Валидируется по схеме `haauthorize` (клиент `HA_3y9q4ak7g4ephrvke`) — под ней только Smart Life / Tuya Smart |
+| Легаси `px1.tuya*.com/homeassistant/auth.do` + `bizType` | Endpoint **жив** (проверено 04.08.2026), но `bizType` — серверный белый список: только `tuya`, `smart_life`, `jinvoo_smart`. Прямое свидетельство отказа для OEM-бренда: `ndg63276/smartathome#12` → `platform geeni not support!`. Библиотеки `tuyaha`/`ha_tuya_custom` заархивированы в 2021 |
+| Alexa / Google Home как мост | Привязать можно, но обратно устройства не отдаются — пользовательского API «выгрузи мой дом» у них нет |
+| Кросс-app шеринг Tion Smart → Smart Life | Данные приложений Tuya независимы; плюс `core#117048` — расшаренные устройства штатная интеграция не подхватывает |
+| `tuya-uncover` «из коробки» | Умеет **только чтение**, Tion в списке вендоров нет, `-v generic` не запустится без правки argparse |
 
-- **tuya-local / штатная Tuya-интеграция HA, cloud-assisted (user code)**
-  («код для другого приложения»). User code проверяется по схеме `haauthorize`,
-  под которой зарегистрированы только Smart Life / Tuya Smart. Код из Tion Smart
-  ей не соответствует.
+### Как Алиса это обходит
 
-Также **точно не помогут** (проверено по исходникам): `tuya-cli --schema`
-(это параметр внутри вашего Cloud-проекта, не селектор OEM), `tinytuya wizard`
-(работает только через iot.tuya.com), `vineetchoudhary/tuya-local-key`
-(schema только smartlife/tuyaSmart), `rospogrigio/localtuya` (нет протокола 3.5).
-Ни один форк localtuya не умеет авторизацию через OEM-приложения.
+Навык Smart Life в Алисе — это **cloud-to-cloud account linking по OAuth 2.0**
+с **партнёрским** `client_id`, выданным Tuya Яндексу по контракту. Список
+white-label приложений по email показывает серверная логика H5-страницы
+авторизации Tuya: партнёрский клиент имеет право перечислить namespace'ы, где
+этот email зарегистрирован.
+
+**Публичного endpoint «дай список OEM-приложений по email» не существует** — это
+внутренний вызов, доступный только партнёрскому клиенту. Повторить именно этот
+механизм энтузиасту нельзя.
 
 ---
 
-## Приёмник (это готово и работает): tuya-local в ручном режиме
+## Путь 1 — эмуляция мобильного приложения (единственный прямой)
 
-Как только `local_key` на руках — локальное подключение делается за минуту,
-облако вообще не участвует, Tion Smart не затрагивается.
+Работает **и для облачного, и для локального** управления. Не требует ни Cloud
+Project, ни партнёрства: вход по обычному email+паролю аккаунта Tion Smart.
 
-**Вариант А — [`make-all/tuya-local`](https://github.com/make-all/tuya-local)**
-(HACS): Add Integration → Tuya Local → `setup_mode` = **manual** → ввести
-`device_id`, host (IP), **local_key**, protocol_version **3.5**.
+```
+POST https://a1.tuyaeu.com/api.json
+```
 
-**Вариант Б — [`xZetsubou/hass-localtuya`](https://github.com/xZetsubou/hass-localtuya)**
-(HACS): при добавлении поставить галку **`no_cloud`** → Add device → ввести
-host, `device_id`, **local_key**, protocol_version 3.5. Есть поле `manual_dps`
-для ручного списка DP.
+Endpoint жив (проверено 04.08.2026: мусорный clientId → `ILLEGAL_CLIENT_ID`,
+реальный clientId с неверной подписью → `SING_VALIDATE_FALED_4`).
+Управление — action `tuya.m.device.dp.publish` с телом `{devId, gwId, dps:{...}}`;
+облачная запись подтверждена в живом коде [`Apollon77/ioBroker.tuya`](https://github.com/Apollon77/ioBroker.tuya)
+(`lib/appcloud.js`, метод `set()`, push 30.06.2026) и `jnicolaes/eufy-robomow-ha`.
 
-Проверить связность до настройки HA:
+**Цена входа — вытащить из APK Tion Smart секреты приложения и воспроизвести
+его подпись.** Это единственный шаг, который может провалиться целиком.
+
+### Что нужно достать
+
+Окружение: рутованный Android-эмулятор (Android Studio AVD с образом без
+Google Play → `adb root`, либо LDPlayer), Tion Smart (`com.tion.tionsmart`),
+вход в свой аккаунт, бризер виден в списке.
+
+| Секрет | Где искать | Сложность |
+|---|---|---|
+| `appKey` (clientId, 20 симв.) и `appSecret` (32 симв.) | `jadx-gui`/`apktool d`, грепать `clientId`, `initKey`, `appKey`, `TUYA_SMART_APPKEY`, `THING_SMART_*`, `strings.xml`, `BuildConfig` | обычно минуты |
+| `certSign` | для OEM-сборок исторически литерал `'A'`; иначе SHA-256 подписного сертификата (`openssl pkcs7 … CERT.RSA`) | минуты |
+| `secret2` (BMP-токен) | стеганография в `assets/t_s.bmp`, декодер [`nalajcie/tuya-sign-hacking`](https://github.com/nalajcie/tuya-sign-hacking) | **основная работа** |
+
+⚠️ Декодер BMP валидирован только на TuyaSmart v3.8.0 (2019). Tion Smart собран
+на свежем SDK (ThingClips, `com.thingclips.*`, `libthing_security.so`) — скорее
+всего старый декодер не ляжет, и токен придётся снимать **Frida-хуком нативной
+функции подписи** ([`redphx/frida-tuya-sdk-debug`](https://github.com/redphx/frida-tuya-sdk-debug)).
+
+### Схема подписи
+
+В 2026 сосуществуют минимум две — какая у Tion Smart, **не подтверждено**,
+определять эмпирически по APK:
+
+- **Старая:** `sign = HMAC-SHA256(key = "<certSign>_<secret2>_<appSecret>", strToSign)`.
+  Референс: `TuyaAPI/cloud/index.js`, `blakadder/tuya-uncover/uncover.py`.
+- **Новая (SDK 6.x / ThingClips):** ключ из четырёх частей, `postData` шифруется
+  **AES-128-GCM**, параметр `et=3`, заголовок `Thing-UA`. Готовая реализация:
+  `errrrata/hacs-inkbird-wifi` → `custom_components/inkbird_wifi/tuya_cloud.py`.
+
+Логин: старый флоу `tuya.m.user.email.token.create` → `tuya.m.user.email.password.login`;
+новый — `thing.m.user.username.token.get` → `thing.m.user.email.password.login`
+(может вернуть `MFA_NEED_SEND_CODE`). Проверка: `tuya.m.my.group.device.list`.
+
+### Карта DP уже есть
+
+Маппинг для 4S — в [tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml):
+
+| DP | Назначение |
+|---|---|
+| 1 | питание (bool) |
+| 108 | скорость 1..6 |
+| 109 | целевая температура 0..25 |
+| 112 | `Recirc` / `Inflow` |
+| 102 / 101 | звук / подсветка |
+| 9 / 10 | текущая / наружная температура |
+| 104 / 105 | мощность нагрева / ресурс фильтра |
+| 111 / 113 | hvac_action / неисправность |
+
+### Трудозатраты
+
+| Сценарий | Время |
+|---|---|
+| Оптимистичный (старая схема, секреты грепаются) | 1–2 вечера |
+| Реалистичный (ThingClips, Frida-хук, AES-GCM) | **2–5 вечеров** при опыте с apktool/Frida |
+| Без опыта Android-реверса | больше, с риском не закрыть шаг с секретами |
+
+> **Важная страховка:** подготовка для облачного и локального пути **одинаковая**
+> (рутованный эмулятор + Tion Smart). Но локальному нужен **один** секрет
+> (`local_key`), прочитанный один раз, а облачному — воспроизвести всю схему
+> подписи и гонять её на каждый запрос. Если Frida-лог отдаст `localKey`, но
+> подпись снять не выйдет — останется рабочее локальное решение
+> (tuya-local, protocol 3.5). То есть шаг не «всё или ничего».
+
+---
+
+## Путь 2 — официальный API Яндекса (предсказуемый по срокам)
+
+Бризер уже привязан к Яндексу через навык Smart Life. Вместо приватного API
+Квазара использовать документированный публичный
+[`api.iot.yandex.net`](https://yandex.ru/dev/dialogs/smart-home/doc/reference-alice/get-devices.html) —
+он отдаёт устройства собственного умного дома, включая подключённые сторонними
+навыками.
+
+Регистрация приложения на `oauth.yandex.ru` → OAuth-токен →
+`GET /v1.0/user/info` (конфигурация), `GET /v1.0/devices/{id}` (состояние),
+`POST` для команд.
+
+**Плюс:** легально, стабильно, не сломается от смены приватного API.
+**Минус:** только polling — изменения с панели бризера приедут с задержкой опроса.
+Трудозатраты: один-два вечера, риск близок к нулю.
+
+---
+
+## Путь 3 — оставить как есть (AlexxIT/YandexStation)
+
+Работает сейчас, обновления идут по **WebSocket** приватного API Квазара и
+приходят практически мгновенно — включая управление с самой панели бризера.
+
+**Минус:** приватный API, Яндекс его ломал (в v3.21.0 от 15.05.2026 авторизация
+полностью переписана; рабочие способы — QR, cookies, перенос токена).
+
+---
+
+## Путь 4 — локально через local_key
+
+Если удалённый доступ не критичен: добыть `local_key` (тем же рутованным
+эмулятором, но нужен только один секрет) → `make-all/tuya-local` в режиме
+**manual** или `xZetsubou/hass-localtuya` с галкой **`no_cloud`**: device_id,
+IP, local_key, protocol **3.5**.
+
+Проверка ключа до настройки HA:
 ```bash
 pip install tinytuya
-python -c "import tinytuya,json; d=tinytuya.Device('bf7af32b6fa1a72391lqy6','192.168.254.153','ВАШ_LOCAL_KEY',version=3.5); print(json.dumps(d.status(),indent=2))"
+python -c "import tinytuya,json; d=tinytuya.Device('DEVICE_ID','IP','LOCAL_KEY',version=3.5); print(json.dumps(d.status(),indent=2))"
 ```
-Если вернётся `{"dps": {...}}` — ключ верный, дальше вносить в интеграцию.
-
-Готовый device-конфиг 4S (маппинг DP в сущности) —
-[tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml).
 
 ---
 
-## Как добыть local_key (сохранив Tion Smart)
+## Путь 5 — запрос в Tion (нетехнический)
 
-Все рабочие способы сводятся к одному: **приложение на Tuya SDK хранит
-`local_key` у себя** (иначе оно не могло бы управлять устройством по LAN).
-Значит его можно прочитать из данных приложения или перехватить при обновлении
-списка устройств. Это read-only операция под вашим же аккаунтом — перепарки нет,
-Tion Smart продолжает работать.
-
-Нужен **root-Android или Android-эмулятор** (LDPlayer / BlueStacks / Android
-Studio AVD с образом без Google Play — там доступен `adb root`). Вход в
-Tion Smart на втором устройстве/эмуляторе **не отвязывает** бризер от телефона.
-
-### Способ 1 (рекомендуется) — Frida-скрипт под Tuya SDK
-
-[`redphx/frida-tuya-sdk-debug`](https://github.com/redphx/frida-tuya-sdk-debug) —
-снимает SSL-pinning и включает лог Tuya SDK. **Явно поддерживает OEM-приложения**
-(в списке — Adaprox Home, тоже white-label Tuya).
-
-1. Эмулятор с root + `frida-server` (версия строго совпадает с `frida-tools`:
-   `pip install frida-tools`).
-2. Установить Tion Smart, войти в свой аккаунт (Central Europe DC), дождаться
-   появления бризера.
-3. `frida --no-pause -U -f <пакет_tion_smart> -l debug.js`
-   (пакет: `adb shell pm list packages | grep -i tion`).
-4. В приложении сделать pull-to-refresh списка устройств → SDK скачает device
-   info с `local_key` → всё уйдёт в logcat. Грепать `localKey` / `deviceRespBeen`.
-
-Если глобальный лог не показывает ключ явно —
-`frida-trace -j '*!*encodeString*' -p <PID>` и грепать вывод по `local_key`.
-
-### Способ 2 — прочитать файлы кэша устройств
-
-Без MITM. На root-устройстве/эмуляторе с залогиненным Tion Smart:
-- **новый формат (вероятен для версии 2026):** бинарный MMKV
-  `/data/data/<пакет>/files/thingmmkv/preferences_global_key` — читать через
-  библиотеку [Tencent/MMKV](https://github.com/Tencent/MMKV) или `strings`/regex
-  по `localKey`;
-- **старый формат:** `/data/data/<пакет>/shared_prefs/preferences_global_key<uid>.xml`
-  — внутри JSON `deviceRespBeen` с полями `devId`, `localKey`, `productId`.
-  Парсер: [`MarkWattTech/TuyaKeyExtractor`](https://github.com/MarkWattTech/TuyaKeyExtractor).
-
-> ⚠️ Не используйте онлайн-сервисы «Tuya Key Extractor Online» — это выгрузка
-> ваших учётных данных на чужой сервер.
-
-### Способ 3 — MITM через Frida (если Способ 1 не зашёл)
-
-Ваша прежняя ошибка **«incorrect local timer»** в HTTP Toolkit — это, скорее
-всего, **не** непробиваемый pinning, а Tuya-код **50502**: сервер отверг запрос
-из-за расхождения часов в подписи. То есть перехват уже прошёл, а помешало
-**рассинхронизированное время**. Значит стоит перепроверить:
-[`httptoolkit/frida-interception-and-unpinning`](https://github.com/httptoolkit/frida-interception-and-unpinning)
-(авто-снятие обфусцированного pinning) **плюс точная NTP-синхронизация** времени
-на эмуляторе и на прокси-машине. После снятия pinning `local_key` приходит
-открытым текстом в ответе `a1.tuyaeu.com/api.json` (`a=tuya.m.my.group.device.list`).
-
-### Способ 4 (быстрая дешёвая проба, шанс низкий) — tuya-uncover
-
-[`blakadder/tuya-uncover`](https://github.com/blakadder/tuya-uncover) логинится
-по email/паролю прямо в облако OEM-приложения и отдаёт `local_key`. В списке
-вендоров Tion Smart нет — нужно вытащить `client_id`+`appSecret` из APK
-(`apktool d`, meta-data `TUYA_SMART_APPKEY`/`TUYA_SMART_SECRET` в AndroidManifest)
-и добавить запись в `_TUYA_KNOWN_VENDORS`, затем `python uncover.py -v tion -r eu <email> "<пароль>"`.
-
-**Риск:** на приложениях новой (ThingClips) эры — а Tion Smart 2026 почти
-наверняка такое — часты `SING_VALIDATE_FALED_4`. Стоит попробовать (10 минут),
-но не рассчитывать.
-
----
-
-## Нетехнический путь — запрос в Tion
-
-Включить авторизацию Home Assistant для приложения Tion Smart может **только
-владелец OEM-приложения** (Tion), в своей консоли Tuya. Формулировка для их
-разработчиков:
+Включить авторизацию Home Assistant для приложения может **только владелец
+OEM-приложения** в своей консоли Tuya:
 
 > «Приложение Tion Smart построено на Tuya App SDK (OEM App). Просим включить
 > для приложения авторизацию Home Assistant по user code / QR (clientid
 > `HA_3y9q4ak7g4ephrvke`, schema `haauthorize`) — как это сделано у Smart Life /
-> Tuya Smart. Либо выдать `local_key` устройства device_id
-> `bf7af32b6fa1a72391lqy6` (product_id `rllylqfcd3lfe3s3`) для локального
-> управления по Tuya protocol 3.5.»
+> Tuya Smart.»
 
-Прецедентов, когда OEM-вендор включал это по просьбе пользователей, публично
-не найдено — но это единственный путь без reverse-engineering.
+Публичных прецедентов, когда OEM-вендор это включал по просьбе пользователей,
+не найдено.
 
 ---
 
-## Итоговый порядок действий
+## Дешёвые пробы перед реверсом (~1 час)
 
-1. Поднять Android-эмулятор с root, поставить Tion Smart, войти, увидеть бризер.
-2. **Способ 2** (прочитать файл кэша) — самый быстрый, если файл не зашифрован.
-3. Если зашифрован — **Способ 1** (Frida `redphx/frida-tuya-sdk-debug`).
-4. Параллельно, за 10 минут — **Способ 4** (tuya-uncover) как лотерейный билет.
-5. Полученный `local_key` → `tinytuya` проверка → **tuya-local manual (3.5)**.
-6. Не сработало ничего — **запрос в Tion**.
+1. **User Code и сканер в Tion Smart** (5 мин). Профиль → Настройки → Аккаунт и
+   безопасность → есть ли «User Code»; есть ли сканер QR. Если обоих нет — путь
+   через user code закрыт окончательно.
+2. **Своя schema** (20 мин, если User Code есть). Эксперимент 04.08.2026 показал:
+   endpoint `apigw.iotbing.com/v1.0/m/life/home-assistant/qrcode/tokens` принимает
+   **произвольные** строки в `schema` — валидация происходит позже, на стороне
+   сканирующего приложения. Подменить `TUYA_SCHEMA` в `custom_components/tuya_local/const.py`
+   на кандидаты (`tionsmart`, `tion`, `tion_smart`), перезапустить HA, отсканировать
+   QR в Tion Smart. Строка schema для Tion **не подтверждена** — это угадывание,
+   шанс низкий, но проверка дешёвая.
+3. **Шеринг в Smart Life** (5 мин). Tion Smart → устройство → Общий доступ →
+   добавить аккаунт Smart Life. Ожидание — отказ.
 
 ---
 
@@ -170,17 +200,10 @@ Tion Smart на втором устройстве/эмуляторе **не от
 | Параметр | Значение |
 |---|---|
 | product_id | `rllylqfcd3lfe3s3` |
-| device_id | `bf7af32b6fa1a72391lqy6` |
-| IP | `192.168.254.153` (зарезервировать за MAC в роутере) |
 | protocol | 3.5 |
-| порт | TCP 6668 |
+| порт (локально) | TCP 6668 |
+| DC аккаунта | Central Europe → `a1.tuyaeu.com` |
+| пакет приложения | `com.tion.tionsmart` |
 
-> `local_key` меняется при каждой перепривязке устройства в приложении —
-> после сброса/смены Wi-Fi модуля ключ придётся добыть заново.
-
-## Резервный путь без reverse-engineering
-
-Если возиться с ключом не хочется — облачный мост через Яндекс: бризер уже в
-«Доме с Алисой», HACS-компонент
-[`AlexxIT/YandexStation`](https://github.com/AlexxIT/YandexStation) импортирует
-его в HA (колонка не нужна). Это не локально (лаг ~секунда), но работает сразу.
+Готовых решений под Tion Smart в мире нет: поиск кода по GitHub на
+`com.tion.tionsmart` — 0 результатов, в списке ~41 вендора `tuya-uncover` его нет.
