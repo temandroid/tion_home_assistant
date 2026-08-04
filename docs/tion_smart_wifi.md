@@ -1,138 +1,131 @@
-# Tion бризеры с Wi-Fi (приложение Tion Smart) → Home Assistant
+# Tuya OEM-устройства (Tion Smart, ALUTECH Smart) → Home Assistant
 
-> Эта инструкция — для бризеров Tion, которые подключаются по **Wi-Fi через
-> приложение Tion Smart** (white-label Tuya). Не путать со старыми моделями,
-> которые работают через шлюз MagicAir — для них основная интеграция этого репо.
+> Инструкция для устройств на Tuya-платформе, живущих в **родных OEM-приложениях**:
+> - бризеры **Tion 4S** (USB Wi-Fi модуль) / **4S TS** / **Bio X** — приложение Tion Smart
+> - ворота и роллеты **ALUTECH Smart** — тоже Tuya (Zigbee-хаб + Wi-Fi-модули)
+>
+> Старые бризеры с MagicAir-шлюзом — не сюда, для них основная интеграция этого репо.
 
-Покрывает:
-- **Tion 4S** с USB-модулем интеграции Wi-Fi (вышел в феврале 2026) — **готовый конфиг!**
-- **Tion 4S TS** (со встроенным Tuya-модулем)
-- **Tion Breezer Bio X** — готовый конфиг
+## Главное ограничение
 
----
+Все «простые» пути (штатная Tuya-интеграция HA, cloud-assisted setup в tuya-local)
+принимают user code **только от Smart Life / Tuya Smart**. У OEM-приложений своя
+схема аккаунтов — их коды отклоняются («код для другого приложения»), и аккаунты
+между приложениями **не общие**.
 
-## Путь 1 (рекомендуется, актуально с августа 2026) — форк tuya-local, всё через UI
+Отсюда выбор:
 
-Никаких ручных YAML-файлов и developer-аккаунта Tuya:
-
-- Форк **`old-atstec/tuya-local`** — это `make-all/tuya-local` со **встроенной
-  поддержкой TION Breezer 4S** (product_id `rllylqfcd3lfe3s3`, protocol 3.5,
-  DP проверены на физическом устройстве). Форк версионируется (2026.7.x)
-  и ставится через HACS.
-- **Cloud-assisted setup** в конфиг-флоу: авторизация по **user code + QR из
-  Smart Life** — `device_id` и `local_key` подтягиваются автоматически.
-  iot.tuya.com не нужен.
-
-> Почему форк: мейнтейнер upstream отклонил PR с поддержкой Tion
-> ([#5554](https://github.com/make-all/tuya-local/pull/5554) /
-> [#5561](https://github.com/make-all/tuya-local/pull/5561)) по политическим
-> мотивам — в `make-all/tuya-local` конфиг не появится.
-
-**Что получится (entity'и для 4S):**
-- `climate` — off / heat / fan_only, скорости 1–6, целевая и текущая температура, hvac_action (heating/idle)
-- `switch` — sound, backlight, recirculation
-- `sensor` — outdoor temperature, heater power (Вт), filter life (%)
-- `binary_sensor` — problem (код ошибки в атрибуте description)
-
-(CO2 у 4S нет — датчик CO2 живёт в MagicAir, а это другая экосистема.)
-
-### Шаг 1. Установить форк tuya-local
-
-HACS → Integrations → Custom repositories → `old-atstec/tuya-local`,
-Category: Integration → Download → перезапуск HA.
-
-> Если уже стоит `make-all/tuya-local` — удалить его сначала, две копии
-> tuya_local конфликтуют.
-
-### Шаг 2. Перепарить бризер в Smart Life
-
-> ⚠️ **Важно:** user code привязан к схеме конкретного приложения. Tion Smart —
-> OEM-приложение со своей схемой аккаунтов, и его код cloud-assisted setup
-> **не принимает** (ошибка «код для другого приложения»). Поддерживаются только
-> **Smart Life** и **Tuya Smart**. Аккаунты между приложениями НЕ общие —
-> вход в Smart Life кредами Tion Smart даст пустой аккаунт без устройств.
-> Поэтому бризер нужно перенести в Smart Life.
-
-1. Поставить приложение **Smart Life**, зарегистрировать аккаунт (регион — Россия/Европа).
-2. В **Tion Smart** удалить бризер (настройки устройства → Remove device) —
-   модуль вернётся в режим сопряжения. Если нет — зажать кнопку на
-   USB-модуле до мигания индикатора.
-3. В **Smart Life** → `+` → Add Device → следовать мастеру Wi-Fi-сопряжения.
-   Панель управления бризером подтянется автоматически — это тот же Tuya-стек.
-4. Smart Life → **Settings → Account and Security → User Code** — записать код.
-
-**Последствия перепарки:**
-- Приложение Tion Smart устройство больше не увидит (управление — Smart Life / HA / Алиса).
-- `local_key` сменится — не страшно, cloud-assisted setup вытянет новый сам.
-- Навык Алисы перепривязать на аккаунт Smart Life (Дом с Алисой → Smart Life → войти новыми кредами).
-- Вернуть бризер в Tion Smart можно в любой момент той же процедурой в обратную сторону.
-
-### Шаг 3. Добавить устройство в HA
-
-**Settings → Devices & Services → Add Integration → Tuya Local**:
-
-1. Выбрать **cloud-assisted setup**.
-2. Ввести **user code** из шага 2 → HA покажет QR.
-3. Отсканировать QR **приложением Smart Life** (Me → иконка сканера).
-4. Выбрать бризер из списка устройств — `device_id`, `local_key`, IP и
-   protocol (3.5) подставятся автоматически.
-5. tuya-local сматчит устройство с конфигом `TION Breezer 4S` по product_id.
-
-**Совет:** зарезервировать IP бризера за MAC в роутере, чтобы не менялся.
-
-### Bio X / если конфига нет в форке
-
-Для Bio X конфиг в форк не входит — положить
-[tion_bio_x_tuya_local.yaml](./tion_bio_x_tuya_local.yaml) вручную в
-`<HA config>/custom_components/tuya_local/devices/`. Копия конфига 4S на
-всякий случай тоже лежит рядом:
-[tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml).
+| Требование | Путь |
+|---|---|
+| **Родные приложения должны работать** (Tion Smart, ALUTECH Smart) | **Путь 1** (Алиса → HA, облако) или **Путь 2** (local_key через iot.tuya.com, локально) |
+| Родное приложение не нужно, важна локальность и простота | Путь 3 (перепарка в Smart Life + форк tuya-local) |
 
 ---
 
-## Путь 2 — через Яндекс.Алису (запасной)
+## Путь 1 (рекомендуется) — Алиса → HA через AlexxIT/YandexStation
 
-Бризер подключается к Алисе через навык **Smart Life** (вход теми же
-кредами, что в Tion Smart). Дальше пробрасываем из Алисы в HA через
-HACS-интеграцию Yandex → HA.
+Устройства остаются в родных приложениях, привязываются к «Дому с Алисой»
+через навыки, а HACS-компонент [`AlexxIT/YandexStation`](https://github.com/AlexxIT/YandexStation)
+импортирует их в HA как entity. **Физическая Яндекс-колонка не обязательна** —
+достаточно аккаунта Яндекса.
 
-**Минусы:** облако Яндекса — лаг 0.5-1 с, зависимость от интернета.
-Использовать, если Путь 1 почему-то не взлетел.
+```
+Tion Smart ────┐
+               ├─ Tuya cloud ─ навык Алисы ─ Дом с Алисой ─ YandexStation ─ HA
+ALUTECH Smart ─┘
+```
 
-1. Дом с Алисой → Устройства → `+` → Производитель → Smart Life → войти
-   кредами Tion Smart → бризер появится в Алисе.
-2. HACS-интеграция для проброса Yandex → HA — подобрать при настройке.
+**Плюсы:** родные приложения работают, один механизм на все OEM-устройства
+(бризер + ворота + роллеты), настройка ~30 минут.
+**Минусы:** облачный путь (Tuya → Яндекс → HA), лаг ~0.5–1.5 с, зависимость от
+интернета и облаков.
+
+### Шаг 1. Привязать устройства к Алисе
+
+- **Tion:** Дом с Алисой → Устройства → `+` → навык **Smart Life** → при входе
+  выбрать white-label приложение Tion Smart, войти его кредами. (У пользователя
+  это уже сделано в мае 2026.)
+- **ALUTECH:** аналогично — навык **ALUTECH Smart** (или тот же Smart Life с
+  выбором white-label), войти кредами приложения ALUTECH Smart.
+
+Проверить: устройства видны и управляются в «Дом с Алисой».
+
+### Шаг 2. Поставить YandexStation в HA
+
+1. HACS → Integrations → поиск **Yandex.Station** (репо `AlexxIT/YandexStation`) → Download → перезапуск HA.
+2. Settings → Devices & Services → Add Integration → **Yandex Station** →
+   авторизация в аккаунте Яндекса (QR / логин).
+3. В настройках интеграции включить импорт нужных устройств умного дома:
+   бризер придёт как `climate`, ворота/роллеты — как `cover`.
+
+Дальше — обычные HA-автоматизации поверх этих entity.
 
 ---
 
-## Путь 3 — официальная Tuya integration HA (запасной)
+## Путь 2 (локальный, для энтузиастов) — local_key через iot.tuya.com
 
-Settings → Add Integration → **Tuya** → вход тоже по user code + QR из
-Smart Life. Работает без дополнительных файлов, но категория бризеров
-маппится неполно (часть DP — сырые числа, см. закрытый
-[issue #149874](https://github.com/home-assistant/core/issues/149874)).
-Базовое управление есть, детальной телеметрии нет. Cloud-only.
+Единственный **полностью локальный** способ, при котором родные приложения
+продолжают работать: привязка OEM-аккаунтов к developer-проекту Tuya
+(read-only, устройства из приложений не исчезают) → получение `local_key` →
+ручная настройка tuya-local.
 
----
+1. https://iot.tuya.com → Cloud Project (Smart Home PaaS, DC **Central Europe**).
+2. Devices → **Link Tuya App Account** → QR сканировать **самим OEM-приложением**
+   (Tion Smart / ALUTECH Smart — у обоих есть сканер). Можно привязать несколько
+   app-аккаунтов к одному проекту.
+3. Devices → All Devices → скопировать `local_key` каждого устройства
+   (или `tinytuya wizard` — вытащит всё в devices.json).
+4. tuya-local (форк `old-atstec/tuya-local` — в нём конфиг 4S встроен) →
+   Add Integration → **manual setup**: IP, device_id, local_key, protocol 3.5.
 
-## Данные устройства пользователя (для отладки)
+> ⚠️ Известный блокер: QR на шаге 2 может постоянно показывать «expired»
+> (баг Tuya-портала, у пользователя воспроизводился в мае 2026). Workarounds:
+> инкогнито-окно + чистые cookies, синхронизация часов ПК (`w32tm /resync /force`),
+> обновить QR и сканировать в первые секунды, попробовать мобильный браузер,
+> сменить браузер. Если QR так и не заработает — Путь 1.
+
+Данные бризера для ручной настройки:
 
 | Параметр | Значение |
 |---|---|
-| Модель | Tion 4S + USB Wi-Fi модуль |
 | product_id | `rllylqfcd3lfe3s3` |
 | device_id | `bf7af32b6fa1a72391lqy6` |
-| IP | 192.168.254.153 |
-| Tuya protocol | 3.5 |
-| DC аккаунта | Central Europe |
+| IP | 192.168.254.153 (зарезервировать в роутере!) |
+| protocol | 3.5 |
+
+Для ворот ALUTECH product_id/DP неизвестны — после привязки смотреть
+в проекте / tinytuya; в tuya-local есть готовые конфиги категории
+garage door / curtain, может сматчиться сам.
+
+---
+
+## Путь 3 (максимально просто + локально, но БЕЗ родного приложения)
+
+Перепарить устройство в **Smart Life** → форк `old-atstec/tuya-local` через
+HACS → cloud-assisted setup (user code + QR из Smart Life) — всё через UI,
+`local_key` подтянется сам. Подробности в истории репо (коммит `0bf90ad`).
+
+Цена: Tion Smart / ALUTECH Smart устройство больше не увидят. Не подходит
+при текущем требовании, оставлено для справки.
+
+---
+
+## Конфиги устройств (резервные копии в этом репо)
+
+- [tion_breezer_4s_tuya_local.yaml](./tion_breezer_4s_tuya_local.yaml) — TION Breezer 4S (проверен на физическом устройстве)
+- [tion_bio_x_tuya_local.yaml](./tion_bio_x_tuya_local.yaml) — TION Breezer Bio X
+
+В upstream `make-all/tuya-local` конфиги Tion не принимают (PR
+[#5554](https://github.com/make-all/tuya-local/pull/5554)/[#5561](https://github.com/make-all/tuya-local/pull/5561)
+отклонены мейнтейнером по политическим мотивам). Живой форк с 4S: `old-atstec/tuya-local`.
 
 ## Troubleshooting
 
 | Симптом | Что проверить |
 |---|---|
-| «Код для другого приложения» при вводе user code | Код взят из Tion Smart (OEM) — поддерживаются только Smart Life / Tuya Smart. Перепарить бризер в Smart Life (Шаг 2) и взять код там |
-| Устройство не матчится с конфигом | YAML в `devices/`, product_id совпадает, HA перезапущен |
-| Connection refused / timeout | Бризер в той же подсети, TCP 6668 не блокируется |
-| `Invalid local_key` | Ключ сменился после перепарки — пройти cloud-assisted setup заново |
-| Entity'и есть, но не реагируют | Tuya держит одну локальную сессию — закрыть Tion Smart на телефоне |
-| Состояние обновляется с лагом | Это push-протокол, лага быть не должно — проверить Wi-Fi бризера |
+| «Код для другого приложения» при вводе user code | Код от OEM-приложения — cloud-assisted принимает только Smart Life / Tuya Smart. Использовать Путь 1 или Путь 2 |
+| QR «expired» на iot.tuya.com | См. workarounds в Пути 2; если не помогло — Путь 1 |
+| Алиса не видит устройство | Перепривязать навык, проверить что устройство онлайн в родном приложении |
+| YandexStation не импортирует устройство | Проверить, что устройство видно в «Дом с Алисой»; обновить список в настройках интеграции |
+| tuya-local: устройство не матчится с конфигом | product_id совпадает? YAML в `devices/`? HA перезапущен? |
+| tuya-local: entity не реагируют | Tuya держит одну локальную сессию — закрыть родное приложение на телефоне |
