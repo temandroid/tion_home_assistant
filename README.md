@@ -6,35 +6,14 @@ code-review. История изменений — в [CHANGELOG.md](CHANGELOG.m
 
 ## Какой у вас бризер? Выберите путь
 
-| Ваше устройство | Приложение | Путь |
+| Ваш бризер | Приложение | Путь |
 |---|---|---|
 | Бризер + шлюз **MagicAir** (S3/S4/4S/Lite через облако MagicAir) | MagicAir | **Эта интеграция** — см. ниже |
-| **4S с USB Wi-Fi модулем** / **4S TS** — нужно **локально**, приложение сохранить | Tion Smart | **BLE через ESP32** ([esphome-tion](https://github.com/dentra/esphome-tion)) — [docs/local_control.md](docs/local_control.md) |
-| Ворота/роллеты **ALUTECH** — нужно **локально**, приложение сохранить | ALUTECH Smart | **Shelly на сухих контактах** — [docs/local_control.md](docs/local_control.md) |
-| То же, но проще и можно через облако | Tion Smart / ALUTECH Smart | Алиса → HA (AlexxIT/YandexStation) — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
-| **Bio X** | Tion Smart | Tuya-пути — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
+| **4S с USB Wi-Fi модулем**, **4S TS**, **Bio X** | Tion Smart | Tuya-стек — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
 
----
-
-## Бризеры с Wi-Fi (Tion Smart) и ворота ALUTECH Smart
-
-Новые бризеры Tion и автоматика ALUTECH работают на Tuya-платформе — **эта
-интеграция для них не подходит**. Выбор пути зависит от одного вопроса:
-**должно ли продолжать работать родное приложение?**
-
-**Локально + родное приложение работает** (рекомендуется) — заходить не через
-Tuya, а по второму, независимому каналу управления:
-- **Tion 4S** — по **BLE** через ESP32 и [`dentra/esphome-tion`](https://github.com/dentra/esphome-tion).
-  Wi-Fi модуль не трогаем, Tion Smart работает параллельно.
-- **Ворота ALUTECH** — реле **Shelly** на клеммы внешней кнопки привода.
-  Zigbee-хаб и приложение ALUTECH Smart не затрагиваются.
-
-Подробности: **[docs/local_control.md](docs/local_control.md)**.
-
-**Проще, но через облако** — привязать устройства к «Дому с Алисой» через навыки
-их приложений и импортировать в HA компонентом
-[`AlexxIT/YandexStation`](https://github.com/AlexxIT/YandexStation) (колонка не
-обязательна). Tuya-пути и Bio X: [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md).
+Новые бризеры с Wi-Fi работают на платформе Tuya, а не через облако MagicAir —
+**эта интеграция для них не подходит**. Способы подключить их к Home Assistant
+собраны в [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md).
 
 ---
 
