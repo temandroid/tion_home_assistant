@@ -209,3 +209,62 @@ OEM-приложения** в своей консоли Tuya:
 
 Готовых решений под Tion Smart в мире нет: поиск кода по GitHub на
 `com.tion.tionsmart` — 0 результатов, в списке ~41 вендора `tuya-uncover` его нет.
+
+---
+
+## Ревизия 2026-10-29 — что изменилось с августа 2026
+
+Повторная проверка (веб, GitHub, форумы HA/Tuya) перед принятием решения.
+**Короткий вердикт: ничего не открылось.** Прямой путь HA → облако Tion Smart
+по-прежнему закрыт ровно теми же стенами, что и в августе; появившиеся за это
+время инструменты лишь **подтверждают** закрытие для OEM-приложений.
+
+### По-прежнему закрыто (подтверждено заново)
+
+| Что | Статус на 2026-10-29 | Источник |
+|---|---|---|
+| OEM-аккаунт = отдельный namespace | Без изменений. Официальный FAQ Tuya: аккаунты OEM-приложения — **отдельная система**, не логинятся в Smart Life / Tuya Smart даже с тем же логином/паролем | [support.tuya.com — OEM accounts](https://support.tuya.com/en/help/_detail/K93eolrqjoiu7) |
+| `haauthorize` / user code для OEM | Без изменений. Штатная Tuya-интеграция HA и `tuya-device-sharing-sdk` построены вокруг QR Smart Life / Tuya Smart; ввода логина/пароля OEM-аккаунта нет | [HA Tuya integration](https://www.home-assistant.io/integrations/tuya/) |
+| QR-логин как источник `local_key` | **Новый инструмент, но для OEM не работает.** `vineetchoudhary/tuya-local-key` (v3.0, 02.10.2026) достаёт `local_key` по QR **без** IoT-проекта — но автор прямо пишет: только Smart Life / Tuya Smart, vendor-branded приложения (а это Tion Smart) не поддерживаются, поля логин/пароль нет | [HA Community — tuya-local-key](https://community.home-assistant.io/t/get-tuya-local-key-via-smartlife-tuyasmart-qr-login-no-tuya-iot-developer-account/1018805) |
+| Smart Life HA integration для OEM | Без изменений; локального управления всё ещё нет, миграция с Tuya v2 невозможна | [tuya/tuya-home-assistant](https://github.com/tuya/tuya-home-assistant) |
+| Готовое решение под Tion Smart | Нет. Поиск по GitHub на `com.tion.tionsmart` и product_id `rllylqfcd3lfe3s3` — по-прежнему 0 проектов | веб-поиск 29.10.2026 |
+| Tion 4S в upstream `tuya-local` | Не добавлен. Поддержка устройств community-driven, свежие релизы `make-all/tuya-local` (2026.5.4) Tion не содержат; наш `tion_breezer_4s_tuya_local.yaml` остаётся единственной картой DP | [make-all/tuya-local releases](https://github.com/make-all/tuya-local/releases) |
+
+### Новое, но мимо цели
+
+- **Новое облако Tion (v4) для MagicAir-экосистемы.** С октября 2026 community-интеграция
+  `vaproloff/tion_home_assistant` (релиз 2026.10.0) перешла на «новое облако Tion»;
+  старое облако отключается, аккаунт переносится в приложении Tion MagicAir.
+  🔸 *Низкая уверенность по связи с нашим кейсом:* это ветка **MagicAir**, не Tuya.
+  Про 4S с USB Wi-Fi и Tion Smart в релизе — ни слова; **нет свидетельств**, что
+  Wi-Fi-бризер теперь виден в облаке MagicAir. Две экосистемы (MagicAir vs
+  Tion Smart/Tuya) остаются раздельными.
+  [vaproloff release 2026.10.0](https://github.com/vaproloff/tion_home_assistant/releases/tag/2026.10.0) ·
+  [PR #40 «Переход на новое облако (v4)»](https://github.com/vaproloff/tion_home_assistant/pull/40)
+  ⚠️ **Побочно важно для нашего репо:** наш облачный режим ходит в `magicair.tion.ru`
+  через pypi-`tion`. Если старое облако MagicAir гасят — облачный режим этой
+  интеграции под угрозой и, вероятно, тоже потребует перевода аккаунта + обновления
+  апстрим-пакета. Это отдельный вопрос, не про Wi-Fi-путь. *(Средняя уверенность.)*
+- **Tion ужесточает свою облачную авторизацию.** В `vaproloff#42` (октябрь 2026)
+  вход ломается на капче: Tion стал принимать только токен капчи, решённый на
+  localhost-странице. Вывод для нас: любой сторонний облачный клиент к Tion
+  становится более хрупким — это довод против облачных мостов в принципе.
+  [vaproloff issue #42](https://github.com/vaproloff/tion_home_assistant/issues/42)
+- **Официальный Tion:** открытого API, Matter для 4S или штатной HA-интеграции
+  по-прежнему не найдено. *(Отсутствие подтверждения, не доказательство отсутствия.)*
+
+### Вердикт и следующий шаг (без изменений с августа)
+
+Прямого «вставь email/пароль Tion Smart» не появилось и не предвидится: барьер
+архитектурный (изолированный namespace OEM + allowlist на `haauthorize`), а не
+временный баг. Единственный прямой облачный путь — тот же **Путь 1**: эмуляция
+мобильного приложения против `a1.tuyaeu.com/api.json` с реверсом секретов из APK.
+
+**Рекомендуемый следующий шаг — по приоритету цели:**
+1. Если удалённый доступ НЕ критичен → **локальный `local_key`** (рутованный
+   эмулятор → `tuya-local` manual / `hass-localtuya` no_cloud, protocol 3.5):
+   один секрет, минимальный риск, карта DP готова. См. [extract_local_key.md](./extract_local_key.md).
+2. Если облако обязательно → реверс APK (Путь 1). Схема подписи Tion Smart
+   по-прежнему **не подтверждена** — определять эмпирически.
+
+Новых «дешёвых проб» не добавилось; проверки из раздела выше остаются актуальными.
