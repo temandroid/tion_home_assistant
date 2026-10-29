@@ -3,11 +3,31 @@
     "step": {
       "user": {
         "title": "Tion",
+        "description": "How is the breezer connected?",
+        "menu_options": {
+          "cloud": "Tion / MagicAir cloud (account)",
+          "ble": "Bluetooth — Tion 4S directly, no cloud"
+        }
+      },
+      "cloud": {
+        "title": "Tion",
         "description": "Enter your Tion / MagicAir cloud credentials.",
         "data": {
           "username": "Email",
           "password": "Password"
         }
+      },
+      "ble": {
+        "title": "Tion 4S over Bluetooth",
+        "description": "Breezers seen by Home Assistant Bluetooth adapters and ESPHome proxies: {found}. If the list is empty, enter the MAC address manually. A breezer bound to MagicAir does not advertise — unbind it or switch MagicAir off first.",
+        "data": {
+          "address": "Breezer (MAC address)",
+          "name": "Name"
+        }
+      },
+      "ble_pair": {
+        "title": "Pairing {name}",
+        "description": "Put {name} ({address}) into pairing mode: in standby (yellow LED) hold the power button for about 5 seconds until the LED blinks blue. Then press Submit within ~30 seconds. A Bluetooth adapter or ESPHome proxy must be within a few metres of the breezer."
       }
     },
     "error": {
@@ -17,18 +37,23 @@
       "endpoint_gone": "Endpoint api2.magicair.tion.ru is gone (404/410). Cloud moved to a new domain — check HA logs.",
       "captcha": "Cloud returned HTML (likely Cloudflare/captcha). Your IP may be blocked.",
       "cannot_connect": "Cannot reach api2.magicair.tion.ru. Check your internet/DNS.",
-      "unknown": "Authentication failed for an unknown reason. See HA logs (enable DEBUG for custom_components.tion)."
+      "unknown": "Authentication failed for an unknown reason. See HA logs (enable DEBUG for custom_components.tion).",
+      "invalid_address": "MAC address must look like AA:BB:CC:DD:EE:FF.",
+      "ble_not_found": "The breezer is not visible to any Bluetooth adapter or proxy of Home Assistant.",
+      "ble_pair_failed": "Pairing failed. Make sure the LED blinks blue and nothing else (MagicAir, phone app) is connected, then try again.",
+      "ble_not_4s": "The device answered, but it is not a Tion 4S."
     },
     "abort": {
-      "already_configured": "This account is already configured."
-    }
+      "already_configured": "This account or breezer is already configured."
+    },
+    "flow_title": "{name}"
   },
   "options": {
     "step": {
       "init": {
         "title": "Tion options",
         "data": {
-          "scan_interval": "Polling interval (seconds, 30-3600)",
+          "scan_interval": "Polling interval (seconds; cloud 30–3600, Bluetooth 15–600)",
           "file_path": "Auth file path"
         }
       }

@@ -8,7 +8,8 @@ code-review. История изменений — в [CHANGELOG.md](CHANGELOG.m
 
 | Ваш бризер | Приложение | Путь |
 |---|---|---|
-| Бризер + шлюз **MagicAir** (S3/S4/4S/Lite через облако MagicAir) | MagicAir | **Эта интеграция** — см. ниже |
+| Бризер + шлюз **MagicAir** (S3/S4/4S/Lite через облако MagicAir) | MagicAir | **Эта интеграция**, облачный режим — см. ниже |
+| **4S** (с MagicAir или без) — напрямую по Bluetooth, без облака | Tion Remote | **Эта интеграция**, режим Bluetooth — [ниже](#bluetooth-tion-4s-без-облака-v130) |
 | **4S с USB Wi-Fi модулем**, **4S TS**, **Bio X** | Tion Smart | Tuya-стек — [docs/tion_smart_wifi.md](docs/tion_smart_wifi.md) |
 
 Новые бризеры с Wi-Fi работают на платформе Tuya, а не через облако MagicAir —
@@ -93,6 +94,40 @@ tion:
 | `comfort` | смешанный | 3 | выкл | ручной |
 | `away` | улица | 1–6 | выкл | AUTO, target_co2=600 |
 | `eco` | улица | 1–4 | выкл | AUTO, target_co2=700 |
+
+## Bluetooth: Tion 4S без облака (v1.3.0+)
+
+Бризер 4S управляется напрямую по BLE через стек `bluetooth` Home Assistant:
+встроенный адаптер хоста или [ESPHome Bluetooth proxy](https://esphome.io/components/bluetooth_proxy/).
+Протокол — по [dentra/esphome-tion](https://github.com/dentra/esphome-tion). Одна запись = один бризер.
+
+**Что нужно**
+- Адаптер или прокси в нескольких метрах от каждого бризера. Прокси — ESP32/ESP32-S3
+  (ESP-IDF), `bluetooth_proxy: active: true`; один прокси держит 3–4 активных подключения.
+  Интеграция подключается только на время опроса/команды и отключается через 15 с тишины.
+- Бризер держит **одно** BLE-подключение. Пока к нему подключены MagicAir или приложение,
+  HA не подключится — MagicAir нужно отвязать или выключить.
+- Прошивка бризера не ниже `02D2` (рекомендуется `04C7`; `02D0` и `03CD` не работают) —
+  требование esphome-tion, проверить можно в приложении Tion Remote.
+
+**Настройка**
+1. `Settings → Devices & Services → Add Integration → Tion → Bluetooth`.
+2. Выберите бризер из найденных или введите MAC-адрес, задайте название.
+3. Переведите бризер в режим сопряжения: в режиме ожидания (жёлтый индикатор) удерживайте
+   кнопку ~5 с до мигания синим — и нажмите «Подтвердить». Интеграция выполнит BLE-сопряжение
+   и проверит, что это 4S.
+
+**Отличия от облака:** нет авто-режима по CO2 (`fan_mode: auto`, пресеты `away`/`eco`) —
+он живёт в MagicAir; заслонка только «улица» (`horizontal`) или «квартира» (`vertical`),
+смешанного режима у 4S нет. Период опроса — 60 с по умолчанию (15–600, кнопка **Configure**).
+
+### Тесты
+
+```bash
+python -m pytest tests/test_ble_protocol.py   # протокол, без Home Assistant
+# полный набор — в Linux/WSL с pytest-homeassistant-custom-component и пакетом tion
+python -m pytest tests
+```
 
 ### Если что-то не работает
 

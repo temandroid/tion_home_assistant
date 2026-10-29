@@ -112,4 +112,5 @@ class TionSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._device.valid
+        # CR-T-034: неудачный опрос координатора тоже гасит сенсор
+        return super().available and self._device.valid

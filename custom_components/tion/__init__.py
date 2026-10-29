@@ -15,8 +15,13 @@ from .const import (
     DATA_API,
     DATA_COORDINATOR,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_BLE_SCAN_INTERVAL,
     DEFAULT_AUTH_FNAME,
     PLATFORMS,
+    CONF_CONNECTION,
+    CONNECTION_BLE,
+    CONF_ADDRESS,
+    CONF_NAME,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,8 +45,9 @@ CONFIG_SCHEMA = vol.Schema(
 class TionDataUpdateCoordinator(DataUpdateCoordinator):
     """Один периодический refresh для всех Tion-устройств — снимает per-entity N×HTTP."""
 
-    def __init__(self, hass, update_interval):
+    def __init__(self, hass, update_interval, api=None):
         super().__init__(hass, _LOGGER, name="tion", update_interval=update_interval)
+        self._api = api      # TionApi облачной записи; у BLE — None
         self._loadables = {}
         self.breezers = []   # list[Breezer]
         self.magicairs = []  # list[MagicAir]
@@ -51,9 +57,20 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator):
             self._loadables[id(obj)] = obj
 
     async def _async_update_data(self):
+        # BLE-бризеры опрашиваются в event loop (async_load), облачные объекты
+        # пакета `tion` — блокирующим load() в executor.
+        blocking = [o for o in self._loadables.values() if not hasattr(o, "async_load")]
+        native = [o for o in self._loadables.values() if hasattr(o, "async_load")]
+
         def _do():
+            # CR-T-034: load() пакета `tion` ошибок не бросает — при недоступном облаке
+            # объекты молча оставались valid со старыми данными. Один принудительный
+            # запрос /location за цикл (дальше load() берут его из кэша TionApi)
+            # даёт явный сигнал сбоя.
+            if self._api is not None and not self._api.get_data(force=True):
+                raise UpdateFailed("Tion: облако не отдало данные")
             errors = 0
-            for obj in list(self._loadables.values()):
+            for obj in blocking:
                 try:
                     obj.load()
                 except Exception as exc:
@@ -61,7 +78,13 @@ class TionDataUpdateCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug("Tion: load() failed for %r: %s", obj, exc)
             return errors
 
-        errors = await self.hass.async_add_executor_job(_do)
+        errors = await self.hass.async_add_executor_job(_do) if blocking else 0
+        for obj in native:
+            try:
+                await obj.async_load()
+            except Exception as exc:
+                errors += 1
+                _LOGGER.debug("Tion: async_load() failed for %r: %s", obj, exc)
         if errors and errors == len(self._loadables):
             raise UpdateFailed("Tion: все load() завершились ошибкой")
         return True
@@ -89,6 +112,49 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Главная точка инициализации интеграции (UI-конфиг или YAML-импорт)."""
+    if entry.data.get(CONF_CONNECTION) == CONNECTION_BLE:
+        return await _async_setup_ble_entry(hass, entry)
+    return await _async_setup_cloud_entry(hass, entry)
+
+
+async def _async_setup_ble_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Один бризер 4S по BLE (встроенный адаптер или ESPHome bluetooth_proxy)."""
+    from datetime import timedelta
+    from .ble_breezer import TionBleBreezer
+
+    scan_interval = timedelta(
+        seconds=int(entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_BLE_SCAN_INTERVAL.total_seconds()))
+    )
+    breezer = TionBleBreezer(hass, entry.data[CONF_ADDRESS], entry.data[CONF_NAME])
+
+    coordinator = TionDataUpdateCoordinator(hass, scan_interval)
+    coordinator.breezers.append(breezer)
+    coordinator.register(breezer)
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except ConfigEntryNotReady:
+        await breezer.async_shutdown()
+        raise
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        DATA_API: breezer,
+        DATA_COORDINATOR: coordinator,
+    }
+    entry.async_on_unload(breezer.async_shutdown)
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+
+    info = breezer.dev_info
+    _LOGGER.info(
+        "Tion BLE: %s (%s) подключён, прошивка %s",
+        breezer.name, breezer.address, info.firmware if info else "?",
+    )
+    return True
+
+
+async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Аккаунт облака Tion / MagicAir: все бризеры и MagicAir аккаунта."""
     from datetime import timedelta
     from tion import Breezer, MagicAir
 
@@ -124,9 +190,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.error("Tion: не удалось авторизоваться — проверьте логин/пароль")
         return False
 
-    devices = await hass.async_add_executor_job(api.get_devices)
+    # CR-T-039: при сбое /location get_devices() молча возвращает [] — запись
+    # загрузилась бы без устройств и не повторила бы попытку.
+    try:
+        if not await hass.async_add_executor_job(api.get_data, True):
+            raise ConfigEntryNotReady("Tion: облако не отдало список устройств")
+        devices = await hass.async_add_executor_job(api.get_devices)
+    except ConfigEntryNotReady:
+        raise
+    except Exception as exc:
+        raise ConfigEntryNotReady(f"Tion: ошибка получения устройств: {exc}") from exc
 
-    coordinator = TionDataUpdateCoordinator(hass, scan_interval)
+    coordinator = TionDataUpdateCoordinator(hass, scan_interval, api)
 
     for device in devices:
         if not device.valid:

@@ -26,12 +26,14 @@ from homeassistant.const import (
     MAJOR_VERSION,
     MINOR_VERSION,
 )
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from tion import Breezer, Zone
 
+from .ble_breezer import TionBleError
 from .const import DOMAIN, DATA_COORDINATOR
 
 _LOGGER = logging.getLogger(__name__)
@@ -101,17 +103,44 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
 
     @property
     def available(self) -> bool:
-        return self._breezer.valid and self._zone.valid
+        # у BLE зоны MagicAir нет — доступность определяет только сам бризер
+        zone_ok = self._zone.valid or not self._supports_auto
+        # CR-T-034: учитываем и неудачный опрос координатора (облако недоступно)
+        return super().available and self._breezer.valid and zone_ok
 
     @property
     def device_info(self) -> DeviceInfo:
         """CR-022: группировка климата и сенсоров бризера в одно устройство."""
-        return DeviceInfo(
+        info = DeviceInfo(
             identifiers={(DOMAIN, self._breezer.guid)},
             name=self._breezer.name,
             manufacturer="Tion",
             model="Breezer",
         )
+        address = getattr(self._breezer, "address", None)
+        if address:  # BLE
+            info["connections"] = {(CONNECTION_BLUETOOTH, address)}
+            info["model"] = "Breezer 4S"
+            dev_info = getattr(self._breezer, "dev_info", None)
+            if dev_info:
+                info["sw_version"] = dev_info.firmware
+        return info
+
+    @property
+    def _supports_auto(self) -> bool:
+        """Авто-режим по CO2 есть только у облака с зоной MagicAir."""
+        return getattr(self._breezer, "supports_auto", True)
+
+    @property
+    def _is_on(self) -> bool:
+        """CR-T-033: включённость по скорости. Облачный `is_on` меняется только
+        в load(), а `speed` сеттеры меняют сразу — иначе после выключения до
+        следующего опроса fan_mode был бы "0" (нет в fan_modes)."""
+        return (self._breezer.speed or 0) > 0
+
+    def _resume_speed(self) -> int:
+        """Скорость для включения: у BLE — последняя заданная, у облака — 1."""
+        return getattr(self._breezer, "last_speed", None) or 1
 
     # ---------- климат ----------
 
@@ -124,7 +153,7 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
         # CR-023: невалидное состояние → None, не строка
         if not self._breezer.valid:
             return None
-        if self._zone.mode == "manual" and not self._breezer.is_on:
+        if self._zone.mode == "manual" and not self._is_on:
             return HVACMode.OFF
         if self._breezer.heater_enabled:
             return HVACMode.HEAT
@@ -163,13 +192,14 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
     def fan_mode(self):
         if self._zone.mode == "auto":
             return FAN_AUTO
-        if not self._breezer.is_on:
+        if not self._is_on:
             return FAN_OFF
         return str(int(self._breezer.speed))
 
     @property
     def fan_modes(self):
-        return [FAN_OFF, FAN_AUTO, "1", "2", "3", "4", "5", "6"]
+        speeds = ["1", "2", "3", "4", "5", "6"]
+        return [FAN_OFF, FAN_AUTO, *speeds] if self._supports_auto else [FAN_OFF, *speeds]
 
     # ---------- preset ----------
 
@@ -180,10 +210,13 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
 
     @property
     def preset_modes(self):
-        return [
+        modes = [
             PRESET_SLEEP, PRESET_ACTIVITY, PRESET_HOME, PRESET_COMFORT,
-            PRESET_BOOST, PRESET_ECO, PRESET_AWAY, PRESET_NONE,
+            PRESET_BOOST, PRESET_ECO, PRESET_AWAY,
         ]
+        if not self._supports_auto:
+            modes = [m for m in modes if not PRESETS[m]["auto"]]
+        return modes + [PRESET_NONE]
 
     # ---------- swing ----------
 
@@ -193,50 +226,72 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
 
     @property
     def swing_modes(self):
-        return [SWING_VERTICAL, SWING_HORIZONTAL, SWING_BOTH]
+        if getattr(self._breezer, "supports_mixed_gate", True):
+            return [SWING_VERTICAL, SWING_HORIZONTAL, SWING_BOTH]
+        return [SWING_VERTICAL, SWING_HORIZONTAL]
 
     # ---------- setters ----------
+
+    async def _async_send(self, obj) -> None:
+        """BLE-бризер шлёт команду сам (async_send), облачные объекты пакета
+        `tion` — блокирующим send() в executor.
+
+        CR-T-032: облачный send() об ошибке не бросает, а возвращает False —
+        раньше команда терялась молча, а UI показывал уже изменённые локально поля.
+        Теперь ошибка видна в UI, а состояние перечитывается из облака."""
+        if hasattr(obj, "async_send"):
+            try:
+                await obj.async_send()
+            except TionBleError as exc:
+                raise HomeAssistantError(str(exc)) from exc
+            return
+        if await self.hass.async_add_executor_job(obj.send) is False:
+            await self.coordinator.async_request_refresh()
+            raise HomeAssistantError(f"{self._breezer.name}: облако Tion не приняло команду")
 
     def _pushed(self) -> None:
         """CR-024: после отправки команды сразу перечитать состояние в HA,
         не дожидаясь периодического refresh (поля breezer/zone уже обновлены
         локально перед send)."""
-        self.schedule_update_ha_state()
+        self.async_write_ha_state()
 
-    def turn_on(self) -> None:
-        self._breezer.speed = 1
-        self._breezer.send()
+    async def async_turn_on(self) -> None:
+        self.preset = PRESET_NONE
+        self._breezer.speed = self._resume_speed()
+        await self._async_send(self._breezer)
         self._pushed()
 
-    def turn_off(self) -> None:
-        self._breezer.speed = 0
-        self._breezer.send()
-        self._pushed()
+    async def async_turn_off(self) -> None:
+        # CR-T-036: как hvac OFF — зона в manual, иначе MagicAir-авто включит бризер обратно
+        await self.async_set_fan_mode(FAN_OFF)
 
-    def set_swing_mode(self, swing_mode: str) -> None:
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        self.preset = PRESET_NONE
         self._breezer.gate = _SWING_TO_GATE.get(swing_mode, 2)
         _LOGGER.info("%s: swing → %s", self._breezer.name, swing_mode)
-        self._breezer.send()
+        await self._async_send(self._breezer)
         self._pushed()
 
-    def set_temperature(self, **kwargs):
+    async def async_set_temperature(self, **kwargs):
         _LOGGER.info("%s: set_temperature %s", self._breezer.name, kwargs)
         if ATTR_TEMPERATURE in kwargs:
             self._breezer.t_set = int(kwargs[ATTR_TEMPERATURE])
-            self._breezer.send()
+            await self._async_send(self._breezer)
         if ATTR_HVAC_MODE in kwargs:
-            self.set_hvac_mode(kwargs[ATTR_HVAC_MODE])
+            await self.async_set_hvac_mode(kwargs[ATTR_HVAC_MODE])
         self._pushed()
 
-    def set_fan_mode(self, fan_mode):
+    async def async_set_fan_mode(self, fan_mode):
         _LOGGER.info("%s: fan_mode → %s", self._breezer.name, fan_mode)
+        # CR-T-038: ручное изменение — пресет больше не соответствует состоянию
+        self.preset = PRESET_NONE
 
         if fan_mode == FAN_OFF:
             if self._zone.valid:
                 self._zone.mode = "manual"
-                self._zone.send()
+                await self._async_send(self._zone)
             self._breezer.speed = 0
-            self._breezer.send()
+            await self._async_send(self._breezer)
             self._pushed()
             return
 
@@ -246,11 +301,11 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
                 return
             # target_co2 НЕ трогаем — управляется только через preset (см. CR-006).
             self._zone.mode = "auto"
-            self._zone.send()
+            await self._async_send(self._zone)
             self._breezer.speed_min_set = 1
             self._breezer.speed_max_set = 6
             self._breezer.heater_enabled = False
-            self._breezer.send()
+            await self._async_send(self._breezer)
             self._pushed()
             return
 
@@ -263,12 +318,12 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
 
         if self._zone.valid:
             self._zone.mode = "manual"
-            self._zone.send()
+            await self._async_send(self._zone)
         self._breezer.speed = new_speed
-        self._breezer.send()
+        await self._async_send(self._breezer)
         self._pushed()
 
-    def set_preset_mode(self, preset_mode):
+    async def async_set_preset_mode(self, preset_mode):
         """Табличное применение пресета — устраняет копипасту веток."""
         _LOGGER.info("%s: preset → %s", self._breezer.name, preset_mode)
 
@@ -278,8 +333,8 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
             return
 
         cfg = PRESETS.get(preset_mode)
-        if cfg is None:
-            _LOGGER.warning("Tion: неизвестный пресет %s", preset_mode)
+        if cfg is None or (cfg["auto"] and not (self._supports_auto and self._zone.valid)):
+            _LOGGER.warning("Tion: пресет %s недоступен", preset_mode)
             self.preset = PRESET_NONE
             return
 
@@ -295,26 +350,22 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
             self._breezer.speed = cfg["speed"]
             self._zone.mode = "manual"
 
-        self._zone.send()
-        self._breezer.send()
+        if self._zone.valid:  # CR-T-037: без MagicAir зону не шлём (как в set_fan_mode)
+            await self._async_send(self._zone)
+        await self._async_send(self._breezer)
         self.preset = preset_mode
         self._pushed()
 
-    def set_hvac_mode(self, hvac_mode):
+    async def async_set_hvac_mode(self, hvac_mode):
         _LOGGER.info("%s: hvac → %s", self._breezer.name, hvac_mode)
+        self.preset = PRESET_NONE
         if hvac_mode == HVACMode.OFF:
-            self.set_fan_mode(FAN_OFF)
-        elif hvac_mode == HVACMode.HEAT:
-            self._breezer.heater_enabled = True
-            if self._breezer.speed == 0:
-                self._breezer.speed = 1
-            self._breezer.send()
-            self._pushed()
-        elif hvac_mode == HVACMode.FAN_ONLY:
-            self._breezer.heater_enabled = False
-            if self._breezer.speed == 0:
-                self._breezer.speed = 1
-            self._breezer.send()
+            await self.async_set_fan_mode(FAN_OFF)
+        elif hvac_mode in (HVACMode.HEAT, HVACMode.FAN_ONLY):
+            self._breezer.heater_enabled = hvac_mode == HVACMode.HEAT
+            if not self._is_on:
+                self._breezer.speed = self._resume_speed()
+            await self._async_send(self._breezer)
             self._pushed()
 
     # ---------- features ----------

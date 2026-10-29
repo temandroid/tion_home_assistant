@@ -1,13 +1,30 @@
 """Config flow для Tion — UI-конфигурация (CR-009/014)."""
 import logging
+import re
 
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_FILE_PATH
 from homeassistant.core import callback
+from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
-from .const import DOMAIN, DEFAULT_SCAN_INTERVAL, DEFAULT_AUTH_FNAME
+from .const import (
+    DOMAIN,
+    DEFAULT_SCAN_INTERVAL,
+    DEFAULT_BLE_SCAN_INTERVAL,
+    DEFAULT_AUTH_FNAME,
+    CONF_CONNECTION,
+    CONNECTION_CLOUD,
+    CONNECTION_BLE,
+    CONF_ADDRESS,
+    CONF_NAME,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -16,6 +33,8 @@ _LOGGER = logging.getLogger(__name__)
 _LEGACY_TOKEN_URL = "https://api2.magicair.tion.ru/idsrv/oauth2/token"
 _LEGACY_CLIENT_ID = "cd594955-f5ba-4c20-9583-5990bb29f4ef"
 _LEGACY_CLIENT_SECRET = "syRxSrT77P"
+
+_MAC_RE = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
 
 
 def _probe_auth(username: str, password: str) -> tuple[bool, str]:
@@ -44,10 +63,11 @@ def _probe_auth(username: str, password: str) -> tuple[bool, str]:
         _LOGGER.error("Tion auth: network error: %s", e)
         return False, "network"
 
-    _LOGGER.info("Tion auth probe: status=%s body=%s", r.status_code, r.text[:500])
-
+    # CR-T-031: тело успешного ответа содержит access_token — в лог его не пишем
     if r.status_code == 200:
+        _LOGGER.info("Tion auth probe: status=200")
         return True, "ok"
+    _LOGGER.info("Tion auth probe: status=%s body=%s", r.status_code, r.text[:500])
     if r.status_code in (404, 410):
         return False, "endpoint_gone"
     body_lower = r.text.lower()
@@ -88,12 +108,125 @@ async def _validate(hass, username: str, password: str, auth_fname: str) -> tupl
         return False, "unknown"
 
 
+def _looks_like_tion(info) -> bool:
+    from .ble_protocol import SERVICE_UUID
+
+    name = (info.name or "").lower()
+    return SERVICE_UUID in info.service_uuids or "breezer" in name or "tion" in name
+
+
 class TionConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """UI-конфигурация Tion."""
+    """UI-конфигурация Tion: облако MagicAir или один бризер 4S по Bluetooth."""
 
     VERSION = 1
 
+    def __init__(self):
+        self._ble_address: str | None = None
+        self._ble_name: str | None = None
+
     async def async_step_user(self, user_input=None):
+        return self.async_show_menu(step_id="user", menu_options=["cloud", "ble"])
+
+    # ---------- Bluetooth ----------
+
+    async def async_step_bluetooth(self, discovery_info):
+        """Бризер найден по service UUID (matcher в manifest.json)."""
+        await self.async_set_unique_id(discovery_info.address.upper())
+        self._abort_if_unique_id_configured()
+        self._ble_address = discovery_info.address.upper()
+        self._ble_name = discovery_info.name or "Tion 4S"
+        self.context["title_placeholders"] = {"name": self._ble_name}
+        return await self.async_step_ble_pair()
+
+    async def async_step_ble(self, user_input=None):
+        """Выбор бризера из найденных HA или ввод MAC вручную."""
+        from homeassistant.components import bluetooth
+
+        errors = {}
+        if user_input is not None:
+            address = user_input[CONF_ADDRESS].strip().upper()
+            if not _MAC_RE.match(address):  # CR-T-041
+                errors[CONF_ADDRESS] = "invalid_address"
+            else:
+                await self.async_set_unique_id(address)
+                self._abort_if_unique_id_configured()
+                self._ble_address = address
+                self._ble_name = user_input[CONF_NAME].strip() or "Tion 4S"
+                return await self.async_step_ble_pair()
+
+        configured = self._async_current_ids()
+        found = {
+            info.address.upper(): f"{info.name or '?'} ({info.address}, RSSI {info.rssi})"
+            for info in bluetooth.async_discovered_service_info(self.hass, connectable=True)
+            if _looks_like_tion(info) and info.address.upper() not in configured
+        }
+        # CR-T-043: со списком найденных MAC всё равно можно ввести вручную
+        # (vol.In не давал, если нужный бризер не попал в список)
+        address_field = (
+            SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=a, label=l) for a, l in found.items()],
+                    custom_value=True,
+                    mode=SelectSelectorMode.DROPDOWN,
+                )
+            )
+            if found
+            else str
+        )
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_ADDRESS): address_field,
+                vol.Required(CONF_NAME, default="Tion 4S"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="ble",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"found": str(len(found))},
+        )
+
+    async def async_step_ble_pair(self, user_input=None):
+        """Сопряжение: бризер в режиме сопряжения → BLE pair → проверка, что это 4S."""
+        from .ble_breezer import TionBleBreezer, TionBleError
+
+        errors = {}
+        if user_input is not None:
+            breezer = TionBleBreezer(self.hass, self._ble_address, self._ble_name)
+            try:
+                info = await breezer.async_pair()
+            except TionBleError as exc:
+                _LOGGER.warning("Tion BLE: %s", exc)
+                errors["base"] = "ble_not_found" if "не виден" in str(exc) else "ble_pair_failed"
+            except Exception as exc:  # BleakError и ошибки протокола
+                _LOGGER.warning("Tion BLE: сопряжение %s не удалось: %s", self._ble_address, exc)
+                errors["base"] = "ble_pair_failed"
+            else:
+                if not info.is_4s:
+                    errors["base"] = "ble_not_4s"
+                else:
+                    return self.async_create_entry(
+                        title=self._ble_name,
+                        data={
+                            CONF_CONNECTION: CONNECTION_BLE,
+                            CONF_ADDRESS: self._ble_address,
+                            CONF_NAME: self._ble_name,
+                        },
+                        options={
+                            CONF_SCAN_INTERVAL: int(DEFAULT_BLE_SCAN_INTERVAL.total_seconds()),
+                        },
+                    )
+
+        return self.async_show_form(
+            step_id="ble_pair",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={"name": self._ble_name, "address": self._ble_address},
+        )
+
+    # ---------- облако ----------
+
+    async def async_step_cloud(self, user_input=None):
         errors = {}
 
         if user_input is not None:
@@ -112,6 +245,7 @@ class TionConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(
                     title=f"Tion ({username})",
                     data={
+                        CONF_CONNECTION: CONNECTION_CLOUD,
                         CONF_USERNAME: username,
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                     },
@@ -136,7 +270,7 @@ class TionConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PASSWORD): str,
             }
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="cloud", data_schema=schema, errors=errors)
 
     async def async_step_import(self, import_data):
         username = import_data[CONF_USERNAME]
@@ -150,6 +284,7 @@ class TionConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(
             title=f"Tion ({username}) [YAML]",
             data={
+                CONF_CONNECTION: CONNECTION_CLOUD,  # CR-T-040: как у записей из UI
                 CONF_USERNAME: username,
                 CONF_PASSWORD: import_data[CONF_PASSWORD],
             },
@@ -176,6 +311,19 @@ class TionOptionsFlow(config_entries.OptionsFlow):
             return self.async_create_entry(title="", data=user_input)
 
         opts = self._entry.options
+        if self._entry.data.get(CONF_CONNECTION) == CONNECTION_BLE:
+            schema = vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_SCAN_INTERVAL,
+                        default=opts.get(
+                            CONF_SCAN_INTERVAL, int(DEFAULT_BLE_SCAN_INTERVAL.total_seconds())
+                        ),
+                    ): vol.All(int, vol.Range(min=15, max=600)),
+                }
+            )
+            return self.async_show_form(step_id="init", data_schema=schema)
+
         schema = vol.Schema(
             {
                 vol.Optional(

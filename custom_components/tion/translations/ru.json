@@ -3,11 +3,31 @@
     "step": {
       "user": {
         "title": "Tion",
+        "description": "Как подключён бризер?",
+        "menu_options": {
+          "cloud": "Облако Tion / MagicAir (учётная запись)",
+          "ble": "Bluetooth — Tion 4S напрямую, без облака"
+        }
+      },
+      "cloud": {
+        "title": "Tion",
         "description": "Введите учётные данные облака Tion / MagicAir.",
         "data": {
           "username": "Email",
           "password": "Пароль"
         }
+      },
+      "ble": {
+        "title": "Tion 4S по Bluetooth",
+        "description": "Бризеров, которых видят Bluetooth-адаптеры и ESPHome-прокси Home Assistant: {found}. Если списка нет — введите MAC-адрес вручную. Бризер, привязанный к MagicAir, не рекламирует себя: сначала отвяжите его или выключите MagicAir.",
+        "data": {
+          "address": "Бризер (MAC-адрес)",
+          "name": "Название"
+        }
+      },
+      "ble_pair": {
+        "title": "Сопряжение: {name}",
+        "description": "Переведите {name} ({address}) в режим сопряжения: в режиме ожидания (жёлтый индикатор) удерживайте кнопку включения ~5 секунд, пока индикатор не замигает синим. Затем в течение ~30 секунд нажмите «Подтвердить». Bluetooth-адаптер или ESPHome-прокси должен быть в нескольких метрах от бризера."
       }
     },
     "error": {
@@ -17,18 +37,23 @@
       "endpoint_gone": "Endpoint api2.magicair.tion.ru недоступен (404/410). Облако перенесли на новый домен — проверьте логи HA.",
       "captcha": "Облако вернуло HTML (вероятно Cloudflare/captcha). Возможно, IP заблокирован — попробуйте позже или с другого IP.",
       "cannot_connect": "Не удалось подключиться к api2.magicair.tion.ru. Проверьте интернет и DNS.",
-      "unknown": "Авторизация провалилась по неизвестной причине. Подробности в логах HA (включите DEBUG для custom_components.tion)."
+      "unknown": "Авторизация провалилась по неизвестной причине. Подробности в логах HA (включите DEBUG для custom_components.tion).",
+      "invalid_address": "MAC-адрес должен быть вида AA:BB:CC:DD:EE:FF.",
+      "ble_not_found": "Бризер не виден ни одному Bluetooth-адаптеру или прокси Home Assistant.",
+      "ble_pair_failed": "Сопряжение не удалось. Проверьте, что индикатор мигает синим и к бризеру не подключены MagicAir или приложение, и повторите.",
+      "ble_not_4s": "Устройство ответило, но это не Tion 4S."
     },
     "abort": {
-      "already_configured": "Эта учётная запись уже настроена."
-    }
+      "already_configured": "Эта учётная запись или этот бризер уже настроены."
+    },
+    "flow_title": "{name}"
   },
   "options": {
     "step": {
       "init": {
         "title": "Настройки Tion",
         "data": {
-          "scan_interval": "Период опроса (секунд, 30-3600)",
+          "scan_interval": "Период опроса (секунд: облако 30–3600, Bluetooth 15–600)",
           "file_path": "Путь к файлу авторизации"
         }
       }
