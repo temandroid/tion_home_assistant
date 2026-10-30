@@ -13,11 +13,11 @@ import logging
 import time
 from typing import Any
 
-from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry
+from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntry, ConfigEntryState
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .cloud_v4 import (
     Breezer,
@@ -139,9 +139,8 @@ class TionV4Coordinator(DataUpdateCoordinator):
         Отказ сервера (TionAuthError) и «час без продления» (TionAuthStaleError,
         скорее сбой Tion) одинаково просят войти; второй снимается сам."""
         if self.cloud.auth_error is not None:
-            if not self._reauth_opened:
-                self._reauth_opened = True
-                self.config_entry.async_start_reauth(self.hass)
+            # Push со старым auth_error во время reload открыл бы поток, переживший reload
+            self.async_request_reauth()
         elif self._reauth_opened:
             self._reauth_opened = False
             for flow in self.hass.config_entries.flow.async_progress_by_handler(
@@ -150,18 +149,30 @@ class TionV4Coordinator(DataUpdateCoordinator):
             ):
                 self.hass.config_entries.flow.async_abort(flow["flow_id"])
 
+    @callback
+    def async_request_reauth(self) -> None:
+        if not self._reauth_opened and self.config_entry.state is not ConfigEntryState.UNLOAD_IN_PROGRESS:
+            self._reauth_opened = True
+            self.config_entry.async_start_reauth(self.hass)
+
     async def _async_update_data(self):
+        """Перечитать структуру (online-флаги).
+
+        Сбой периодического перечитывания — не повод гасить сущности: состояние идёт
+        push'ем, а доступность уже учитывает живой канал (channel_up) и online-флаги.
+        Поэтому UpdateFailed здесь не бросаем — иначе один сбой GetStructure при живом
+        NATS делал бы недоступным всё на минуту (как и у апстрима)."""
         try:
             await self.cloud.async_refresh()
         except TionAuthStaleError as err:
-            self._sync_reauth()
-            raise UpdateFailed("Tion: облако больше часа не продлевает сессию") from err
+            _LOGGER.warning("Tion v4: облако больше часа не продлевает сессию: %s", err)
         except TionAuthError as err:
+            self._reauth_opened = True  # снимется в _sync_reauth, если сессия оживёт
             raise ConfigEntryAuthFailed("Tion отклонил сохранённую сессию") from err
         except TionConnectionError as err:
-            raise UpdateFailed("Tion: облако недоступно") from err
+            _LOGGER.debug("Tion v4: облако недоступно при перечитывании структуры: %s", err)
         except TionApiError as err:
-            raise UpdateFailed(f"Tion: ошибка облака: {err}") from err
+            _LOGGER.warning("Tion v4: ошибка облака при перечитывании структуры: %s", err)
         self._sync_reauth()
         return self.cloud.account
 
@@ -289,7 +300,9 @@ class TionV4Zone:
         changes = {}
         if "zone_mode" in pending:
             enabled = pending["zone_mode"][0] == "auto"
-            if auto is None or auto.enabled != enabled:
+            # Ненастроенный авторежим — выключен: ручная команда не должна писать
+            # в комнату (и падать из-за неё), ревью 1.4.0 H2
+            if (auto.enabled if auto is not None else False) != enabled:
                 changes["enabled"] = enabled
         if "target_co2" in pending:
             co2 = pending["target_co2"][0]
@@ -447,11 +460,18 @@ class TionV4Breezer(_TionV4Device):
         for name in names:
             self._pending.pop(name, None)
 
+    def _prune(self) -> None:
+        """Убрать отложенные значения старше TTL — иначе они ушли бы со следующей командой."""
+        now = time.monotonic()
+        for name in [n for n, (_, at) in self._pending.items() if now - at > _PENDING_TTL]:
+            del self._pending[name]
+
     async def async_send(self) -> None:
         """Отправить накопленные изменения: datapoints бризеру, пределы — комнате."""
         b = self._breezer()
         if b is None:
             raise TionV4Error(f"{self.name}: бризер не найден в аккаунте Tion")
+        self._prune()
         pending = {name: value for name, (value, _) in self._pending.items()}
         changes: dict[str, Any] = {}
         if "speed" in pending:
@@ -476,15 +496,20 @@ class TionV4Breezer(_TionV4Device):
             try:
                 await self._coordinator.cloud.async_command(b.command(**changes))
             except (TionError, ValueError) as err:
-                self._forget(*names)
-                raise _command_error(self.name, err) from err
+                # и пределы: climate выставил их до этой команды, но они не ушли
+                self._forget(*names, "speed_min_set", "speed_max_set")
+                raise self._failed(err) from err
         # Принятые значения остаются в _pending до push'а с ними же (см. _value)
         auto = self.room_auto
-        limits = {
-            field: pending[name]
-            for name, field in (("speed_min_set", "speed_min"), ("speed_max_set", "speed_max"))
-            if name in pending and (auto is None or getattr(auto, field) != pending[name])
-        }
+        top = self.speed_max
+        limits = {}
+        for name, field in (("speed_min_set", "speed_min"), ("speed_max_set", "speed_max")):
+            if name not in pending:
+                continue
+            # пределы climate рассчитаны на 6 скоростей, у O2 их 4
+            value = min(pending[name], top) if top else pending[name]
+            if auto is None or getattr(auto, field) != value:
+                limits[field] = value
         if limits:
             await self._async_set_auto(limits, forget=("speed_min_set", "speed_max_set"))
 
@@ -509,4 +534,10 @@ class TionV4Breezer(_TionV4Device):
             await self._coordinator.cloud.async_set_auto_control(room.id, **changes)
         except (TionError, ValueError) as err:
             self._forget(*forget)
-            raise _command_error(self.name, err) from err
+            raise self._failed(err) from err
+
+    def _failed(self, err: Exception) -> TionV4Error:
+        """Ошибка команды для UI; отказ авторизации заодно открывает запрос входа."""
+        if isinstance(err, TionAuthError):
+            self._coordinator.async_request_reauth()
+        return _command_error(self.name, err)

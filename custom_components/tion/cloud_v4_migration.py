@@ -27,9 +27,12 @@ _LOGGER = logging.getLogger(__name__)
 def async_migrate_old_ids(hass: HomeAssistant, entry: ConfigEntry, account: TionAccount) -> dict[str, str]:
     """Перенести устройства и сущности со старых ID на ID облака v4; вернуть {старый: новый}."""
     current = _current_ids_by_mac(account)
+    by_name = _current_ids_by_name(account)
     device_registry = dr.async_get(hass)
+    entries = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    taken = {i[1] for e in entries for i in e.identifiers if i[0] == DOMAIN}
     moves: dict[str, str] = {}
-    for device_entry in dr.async_entries_for_config_entry(device_registry, entry.entry_id):
+    for device_entry in entries:
         old = {
             identifier
             for identifier in device_entry.identifiers
@@ -37,10 +40,19 @@ def async_migrate_old_ids(hass: HomeAssistant, entry: ConfigEntry, account: Tion
         }
         if not old:
             continue
-        if (current_id := _current_id(device_entry, current)) is None:
-            _LOGGER.info(
-                "Tion v4: для %s нет устройства с тем же MAC в новом облаке — "
-                "останется под старым ID (сущности станут недоступны)",
+        current_id = _current_id(device_entry, current)
+        if current_id is None:
+            # Запасной путь: устройства из ≤1.3.1 без MAC в реестре (обновились уже
+            # после переноса аккаунта) — по однозначному имени, как в приложении.
+            current_id = by_name.get(device_entry.name or "")
+            if current_id is not None and current_id not in taken:
+                _LOGGER.info("Tion v4: %s сопоставлен с новым облаком по имени (MAC нет)", device_entry.name)
+            else:
+                current_id = None
+        if current_id is None:
+            _LOGGER.warning(
+                "Tion v4: для %s нет устройства с тем же MAC или именем в новом облаке — "
+                "останется под старым ID (сущности станут недоступны, новые появятся рядом)",
                 device_entry.name,
             )
             continue
@@ -52,6 +64,7 @@ def async_migrate_old_ids(hass: HomeAssistant, entry: ConfigEntry, account: Tion
         except dr.DeviceIdentifierCollisionError:
             _LOGGER.debug("Tion v4: ID %s уже занят другим устройством", current_id)
             continue
+        taken.add(current_id)
         moves.update((old_id, current_id) for _, old_id in old)
 
     moved_entities = 0
@@ -99,6 +112,18 @@ def _mac_value(mac: str) -> int | None:
     return int(digits, 16) or None
 
 
+def _mac_values(mac: str) -> tuple[int, ...]:
+    """MAC как число в прямом и обратном порядке байтов.
+
+    Старое облако отдаёт `mac` и `mac_long`, и строка там — little-endian запись числа
+    (3A:BE:…:C2 ↔ 0xC20C…BE3A); v4 выводит число big-endian. Какое из них совпадёт
+    с v4, на живом аккаунте не проверено — сравниваем оба (MAC уникальны, ложных
+    совпадений не будет)."""
+    if (value := _mac_value(mac)) is None:
+        return ()
+    return (value, int.from_bytes(value.to_bytes(6, "big"), "little")) if value < 1 << 48 else (value,)
+
+
 def _device_macs(device_entry: dr.DeviceEntry) -> list[str]:
     return [mac for kind, mac in device_entry.connections if kind == dr.CONNECTION_NETWORK_MAC]
 
@@ -115,9 +140,19 @@ def _current_ids_by_mac(account: TionAccount) -> dict[int, str]:
 
 def _current_id(device_entry: dr.DeviceEntry, current: Mapping[int, str]) -> str | None:
     for mac in _device_macs(device_entry):
-        if (value := _mac_value(mac)) is not None and value in current:
-            return current[value]
+        for value in _mac_values(mac):
+            if value in current:
+                return current[value]
     return None
+
+
+def _current_ids_by_name(account: TionAccount) -> dict[str, str]:
+    """Имя → ID устройства; имя, общее у нескольких устройств, пропускается."""
+    owners: dict[str, set[str]] = {}
+    for device in account.devices():
+        if device.name:
+            owners.setdefault(device.name, set()).add(device.id)
+    return {name: next(iter(ids)) for name, ids in owners.items() if len(ids) == 1}
 
 
 def _moved_unique_id(unique_id: str, moves: Mapping[str, str]) -> str | None:

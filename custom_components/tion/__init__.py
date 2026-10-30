@@ -191,20 +191,17 @@ async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         raise ConfigEntryNotReady(f"Tion: ошибка авторизации: {exc}") from exc
 
     if not api.authorization:
-        # CR-T-044: аккаунт, перенесённый в новое приложение MagicAir, старое облако
-        # не пускает — reauth-flow ведёт ко входу в облако v4.
-        raise ConfigEntryAuthFailed(
-            "Tion: старое облако MagicAir отклонило вход. Если аккаунт перенесён в новое "
-            "приложение Tion MagicAir — войдите заново (облако v4)."
-        )
+        await _async_raise_legacy_auth_failure(hass, username, password)
 
     # CR-T-039: при сбое /location get_devices() молча возвращает [] — запись
     # загрузилась бы без устройств и не повторила бы попытку.
     try:
         if not await hass.async_add_executor_job(api.get_data, True):
-            raise ConfigEntryNotReady("Tion: облако не отдало список устройств")
+            # с сохранённым токеном пакет логин не повторяет и молча получает 401 —
+            # проверяем вход отдельно, чтобы перенесённый аккаунт дошёл до reauth
+            await _async_raise_legacy_auth_failure(hass, username, password)
         devices = await hass.async_add_executor_job(api.get_devices)
-    except ConfigEntryNotReady:
+    except (ConfigEntryNotReady, ConfigEntryAuthFailed):
         raise
     except Exception as exc:
         raise ConfigEntryNotReady(f"Tion: ошибка получения устройств: {exc}") from exc
@@ -214,7 +211,16 @@ async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     # не хранят, он есть только в «сырых» данных /location.
     try:
         raw_devices, _ = await hass.async_add_executor_job(api._get_devices_data)
-        macs = {d.guid: d.mac for d in raw_devices if d.guid and d.mac}
+        # нулевые и общие MAC не пишем: в одной записи connections уникальны,
+        # второе устройство с тем же MAC не добавилось бы
+        counts: dict[str, int] = {}
+        for d in raw_devices:
+            if d.guid and d.mac and d.mac.strip("0:-").strip():
+                counts[d.mac.upper()] = counts.get(d.mac.upper(), 0) + 1
+        macs = {
+            d.guid: d.mac for d in raw_devices
+            if d.guid and d.mac and counts.get(d.mac.upper()) == 1
+        }
     except Exception as exc:
         _LOGGER.debug("Tion: MAC устройств не получены: %s", exc)
         macs = {}
@@ -255,6 +261,26 @@ async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         len(coordinator.magicairs),
     )
     return True
+
+
+async def _async_raise_legacy_auth_failure(hass: HomeAssistant, username: str, password: str):
+    """Старое облако не пустило: отказ входа → reauth (переход на v4), иначе — повтор.
+
+    Пакет `tion` не различает «неверный пароль» и «нет сети»; probe из config flow
+    различает. Сетевой сбой не должен открывать reauth, который ведёт только в v4."""
+    from .config_flow import _probe_auth
+
+    ok, reason = await hass.async_add_executor_job(_probe_auth, username, password)
+    if not ok and reason == "invalid_credentials":
+        # CR-T-044: аккаунт, перенесённый в новое приложение MagicAir, старое облако
+        # не пускает — reauth-flow ведёт ко входу в облако v4.
+        raise ConfigEntryAuthFailed(
+            "Tion: старое облако MagicAir отклонило вход. Если аккаунт перенесён в новое "
+            "приложение Tion MagicAir — войдите заново (облако v4)."
+        )
+    if ok:
+        raise ConfigEntryNotReady("Tion: облако не отдало список устройств")
+    raise ConfigEntryNotReady(f"Tion: старое облако недоступно ({reason})")
 
 
 async def _async_setup_cloud_v4_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -346,8 +372,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Пересоздать entry при смене опций (scan_interval / file_path).
-
-    schedule_reload, а не reload: при переходе на v4 reauth-flow сам перезагружает
-    запись — два запланированных reload'а HA сливает в один."""
+    """Пересоздать entry при смене опций (scan_interval / file_path)."""
+    # Переход на v4 меняет data и опции записи, и reload делает сам reauth-flow —
+    # второй reload здесь был бы лишним циклом unload/setup.
+    if entry.data.get(CONF_CONNECTION) == CONNECTION_CLOUD_V4:
+        return
     hass.config_entries.async_schedule_reload(entry.entry_id)

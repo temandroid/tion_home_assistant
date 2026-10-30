@@ -412,7 +412,7 @@ async def test_legacy_login_refused_opens_v4_reauth(hass):
         domain=DOMAIN, unique_id=EMAIL, data={"connection": "cloud", "username": EMAIL, "password": "x"},
     )
     entry.add_to_hass(hass)
-    with patch("tion.TionApi", return_value=RefusingApi()):
+    with patch("tion.TionApi", return_value=RefusingApi()),             patch("custom_components.tion.config_flow._probe_auth", return_value=(False, "invalid_credentials")):
         await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     assert entry.state is ConfigEntryState.SETUP_ERROR
@@ -431,3 +431,120 @@ async def test_legacy_breezer_device_info_has_mac(hass):
     breezer.macs = ("3A:BE:65:DF:0C:C2",)
     info = TionClimate(TionDataUpdateCoordinator(hass, timedelta(minutes=2)), breezer).device_info
     assert info["connections"] == {(dr.CONNECTION_NETWORK_MAC, "3A:BE:65:DF:0C:C2")}
+
+
+# ---------- регрессии ревью 1.4.0 ----------
+
+async def test_legacy_network_failure_retries_without_reauth(hass):
+    """M4: нет сети при первом входе — повтор, а не reauth в v4."""
+    class RefusingApi:
+        authorization = None
+
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=EMAIL, data={"connection": "cloud", "username": EMAIL, "password": "x"})
+    entry.add_to_hass(hass)
+    with patch("tion.TionApi", return_value=RefusingApi()), \
+            patch("custom_components.tion.config_flow._probe_auth", return_value=(False, "network")):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+
+
+async def test_legacy_stale_token_refused_opens_reauth(hass):
+    """M4: токен из файла протух, а повторный вход отклонён → reauth, не вечный NotReady."""
+    class StaleApi:
+        authorization = "Bearer old"
+
+        def get_data(self, force=False):
+            return False
+
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=EMAIL, data={"connection": "cloud", "username": EMAIL, "password": "x"})
+    entry.add_to_hass(hass)
+    with patch("tion.TionApi", return_value=StaleApi()), \
+            patch("custom_components.tion.config_flow._probe_auth", return_value=(False, "invalid_credentials")):
+        await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert [f["step_id"] for f in hass.config_entries.flow.async_progress_by_handler(DOMAIN)] == ["reauth_legacy"]
+
+
+async def test_migrate_checkbox_keeps_options(hass, login_auth):
+    """H1: с галочкой опции не меняются — иначе reload записи прервал бы reauth."""
+    entry = MockConfigEntry(
+        domain=DOMAIN, unique_id=EMAIL, data={"connection": "cloud", "username": EMAIL, "password": "x"},
+        options={"scan_interval": 120, "file_path": "tion_auth"},
+    )
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    await hass.config_entries.options.async_configure(
+        result["flow_id"], {"scan_interval": 600, "file_path": "tion_auth", "migrate_v4": True}
+    )
+    await hass.async_block_till_done()
+    assert entry.options == {"scan_interval": 120, "file_path": "tion_auth"}
+    assert [f["step_id"] for f in hass.config_entries.flow.async_progress_by_handler(DOMAIN)] == ["reauth_legacy"]
+
+
+async def test_manual_speed_in_room_without_auto_does_not_touch_room(hass, cloud):
+    """H2: ненастроенный авторежим = выключен; ручная скорость не пишет в комнату."""
+    from custom_components.tion.cloud_v4_devices import TionV4Coordinator
+
+    calls = []
+
+    async def set_auto(room_id, **changes):
+        calls.append(changes)
+        raise ValueError("room write refused")
+
+    cloud.async_set_auto_control = set_auto
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=EMAIL, data=V4_DATA)
+    entry.add_to_hass(hass)
+    coordinator = TionV4Coordinator(hass, entry, cloud)
+    coordinator.build_devices()
+    breezer = next(b for b in coordinator.breezers if b.guid == BREEZER_3S)
+    breezer.zone.mode = "manual"
+    await breezer.zone.async_send()
+    breezer.speed = 4
+    await breezer.async_send()
+    assert calls == []
+    assert _sent(cloud) == {"on_off": 1, "fan_speed_level": 4}
+
+
+async def test_failed_refresh_keeps_pushed_state_available(hass, patched_cloud, cloud):
+    """M3: сбой GetStructure при живом канале не гасит сущности."""
+    from custom_components.tion.cloud_v4 import TionConnectionError
+
+    entry = await _setup(hass)
+    cloud.refresh_error = TionConnectionError("down")
+    await hass.data[DOMAIN][entry.entry_id]["coordinator"].async_refresh()
+    await hass.async_block_till_done()
+    assert hass.states.get(_climate(hass, BREEZER_4S)).state == "heat"
+
+
+async def test_failed_command_forgets_auto_limits(hass, patched_cloud, cloud):
+    """M5: команда бризеру упала — пределы, выставленные до неё, не висят в pending."""
+    await _setup(hass)
+    entity_id = _climate(hass, BREEZER_4S)
+    cloud.command_error = TionDeviceTimeoutError("timeout")
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call("climate", "set_fan_mode", {"entity_id": entity_id, "fan_mode": "auto"}, blocking=True)
+    assert hass.states.get(entity_id).attributes["speed_max_set"] == 4
+    cloud.command_error = None
+    await hass.services.async_call("climate", "set_swing_mode", {"entity_id": entity_id, "swing_mode": "vertical"}, blocking=True)
+    assert [c for c in _calls(cloud, "auto_control") if "speed_max" in c[1]] == []
+
+
+async def test_migration_by_name_and_reversed_mac(hass, patched_cloud, cloud):
+    """M1: устройство без MAC — по имени; M2: MAC в обратном порядке байтов."""
+    mac_4s = cloud.account.device(BREEZER_4S).macs[0]
+    reversed_mac = ":".join(reversed(mac_4s.split(":")))
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=EMAIL, data=V4_DATA)
+    entry.add_to_hass(hass)
+    dev_reg, ent_reg = dr.async_get(hass), er.async_get(hass)
+    d1 = dev_reg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, "old-4s")},
+                                     connections={(dr.CONNECTION_NETWORK_MAC, reversed_mac)}, name="Спальня")
+    d2 = dev_reg.async_get_or_create(config_entry_id=entry.entry_id, identifiers={(DOMAIN, "old-3s")}, name="Breezer 3S")
+    ent_reg.async_get_or_create("climate", DOMAIN, "old-4s", config_entry=entry, device_id=d1.id, suggested_object_id="b4")
+    ent_reg.async_get_or_create("climate", DOMAIN, "old-3s", config_entry=entry, device_id=d2.id, suggested_object_id="b3")
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert ent_reg.async_get("climate.b4").unique_id == BREEZER_4S
+    assert ent_reg.async_get("climate.b3").unique_id == BREEZER_3S

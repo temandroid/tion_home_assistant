@@ -444,9 +444,12 @@ class TionConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_mismatch(reason="wrong_account")
             # Запись старого облака становится v4: опции опроса и файла токена не нужны.
             # Устройства и entity_id перенесёт по MAC setup (cloud_v4_migration).
-            return self.async_update_reload_and_abort(
-                self._get_reauth_entry(), title=title, data=data, options={}
-            )
+            # Не async_update_reload_and_abort: у старой записи есть update listener,
+            # HA на это ругается (с 2026.12 — ошибка) и перезагрузил бы её дважды.
+            entry = self._get_reauth_entry()
+            self.hass.config_entries.async_update_entry(entry, title=title, data=data, options={})
+            self.hass.config_entries.async_schedule_reload(entry.entry_id)
+            return self.async_abort(reason="reauth_successful")
         self._abort_if_unique_id_configured()
         return self.async_create_entry(title=title, data=data)
 
@@ -540,9 +543,12 @@ class TionOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_init(self, user_input=None):
         if user_input is not None:
-            # CR-T-044: переход на облако v4 — через reauth-flow (пароль, капча, код)
+            # CR-T-044: переход на облако v4 — через reauth-flow (пароль, капча, код).
+            # Опции при этом не сохраняем: их смена перезагрузила бы запись, а reload
+            # прерывает открытые reauth-потоки (ревью 1.4.0 H1).
             if user_input.pop(CONF_MIGRATE_V4, False):
                 self._entry.async_start_reauth(self.hass)
+                return self.async_create_entry(title="", data=dict(self._entry.options))
             return self.async_create_entry(title="", data=user_input)
 
         opts = self._entry.options
