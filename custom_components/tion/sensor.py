@@ -4,7 +4,7 @@ import logging
 from homeassistant.components.sensor import SensorStateClass, SensorEntity
 from homeassistant.components.sensor import ATTR_STATE_CLASS as STATE_CLASS
 from homeassistant.const import UnitOfTemperature
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, DATA_COORDINATOR, CO2_PPM, HUM_PERCENT
@@ -73,11 +73,18 @@ class TionSensor(CoordinatorEntity, SensorEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """CR-022: привязка сенсора к устройству (бризер/MagicAir)."""
-        return DeviceInfo(
+        info = DeviceInfo(
             identifiers={(DOMAIN, self._device.guid)},
             name=self._device.name,
             manufacturer="Tion",
         )
+        # CR-T-044: MAC — для переезда записи на облако v4 (см. climate.device_info)
+        macs = getattr(self._device, "macs", None)
+        if macs:
+            info["connections"] = {(CONNECTION_NETWORK_MAC, mac) for mac in macs}
+        if model := getattr(self._device, "model_name", None):
+            info["model"] = model
+        return info
 
     @property
     def native_value(self):

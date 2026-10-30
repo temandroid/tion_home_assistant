@@ -27,7 +27,11 @@ from homeassistant.const import (
     MINOR_VERSION,
 )
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import CONNECTION_BLUETOOTH, DeviceInfo
+from homeassistant.helpers.device_registry import (
+    CONNECTION_BLUETOOTH,
+    CONNECTION_NETWORK_MAC,
+    DeviceInfo,
+)
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -117,6 +121,14 @@ class TionClimate(CoordinatorEntity, ClimateEntity, RestoreEntity):
             manufacturer="Tion",
             model="Breezer",
         )
+        # CR-T-044: MAC облачных бризеров — по нему запись переезжает на облако v4
+        macs = getattr(self._breezer, "macs", None)
+        if macs:
+            info["connections"] = {(CONNECTION_NETWORK_MAC, mac) for mac in macs}
+        if model := getattr(self._breezer, "model_name", None):
+            info["model"] = model
+        if firmware := getattr(self._breezer, "firmware", None):
+            info["sw_version"] = str(firmware)
         address = getattr(self._breezer, "address", None)
         if address:  # BLE
             info["connections"] = {(CONNECTION_BLUETOOTH, address)}
