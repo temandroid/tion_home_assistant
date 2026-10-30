@@ -5,13 +5,27 @@
         "title": "Tion",
         "description": "How is the breezer connected?",
         "menu_options": {
-          "cloud": "Tion / MagicAir cloud (account)",
+          "cloud_v4": "Tion cloud — new Tion MagicAir app (recommended)",
+          "cloud": "Old MagicAir cloud (api2) — until Tion shuts it down",
           "ble": "Bluetooth — Tion 4S directly, no cloud"
+        }
+      },
+      "cloud_v4": {
+        "title": "Tion cloud",
+        "description": "Sign in with the account of the new Tion MagicAir app. Home Assistant opens a captcha page, then Tion e-mails you a code.\n\nTion currently accepts the captcha only from a page at http://localhost. To sign in, forward port 80 of this computer to Home Assistant for the duration of the login and enter http://localhost below — see the [guide]({docs_url}). Signing in from a phone will not work.",
+        "data": {
+          "email": "E-mail",
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
+        },
+        "data_description": {
+          "password": "Only used to sign in, not stored.",
+          "captcha_base_url": "Leave empty if you did not set up port forwarding. Otherwise enter http://localhost."
         }
       },
       "cloud": {
         "title": "Tion",
-        "description": "Enter your Tion / MagicAir cloud credentials.",
+        "description": "Credentials of the old MagicAir cloud (api2.magicair.tion.ru). Tion is shutting it down: if the account is already moved to the new Tion MagicAir app, choose “Tion cloud”.",
         "data": {
           "username": "Email",
           "password": "Password"
@@ -28,23 +42,65 @@
       "ble_pair": {
         "title": "Pairing {name}",
         "description": "Put {name} ({address}) into pairing mode: in standby (yellow LED) hold the power button for about 5 seconds until the LED blinks blue. Then press Submit within ~30 seconds. A Bluetooth adapter or ESPHome proxy must be within a few metres of the breezer."
+      },
+      "captcha": {
+        "title": "Captcha",
+        "description": "Complete the check on the page that opened. Home Assistant continues once it is done."
+      },
+      "code": {
+        "title": "E-mail code",
+        "description": "Tion sent a confirmation code to {email}. Enter it to finish signing in.",
+        "data": {
+          "code": "Code"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Sign in to Tion again",
+        "description": "Sign in to Tion again for {email}: the cloud rejected the saved session or has not renewed it for over an hour (then it is most likely a Tion outage and the request clears itself). Enter the password, then the captcha and the e-mail code follow.\n\nThe captcha is only accepted from a page at http://localhost — see the [guide]({docs_url}).",
+        "data": {
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
+        },
+        "data_description": {
+          "captcha_base_url": "Leave empty if you did not set up port forwarding. Otherwise enter http://localhost."
+        }
+      },
+      "reauth_legacy": {
+        "title": "Move to the new Tion cloud",
+        "description": "The {email} entry uses the old MagicAir cloud, which Tion is shutting down (or it already refused the login). Sign in to the new Tion cloud: password, then captcha and e-mail code. Devices, entity IDs and history are kept — they are matched by MAC address.\n\nMove the account in the new Tion MagicAir app first. The captcha is only accepted from a page at http://localhost — see the [guide]({docs_url}).",
+        "data": {
+          "password": "Password",
+          "captcha_base_url": "Captcha page address"
+        },
+        "data_description": {
+          "captcha_base_url": "Leave empty if you did not set up port forwarding. Otherwise enter http://localhost."
+        }
       }
     },
     "error": {
-      "invalid_auth": "Invalid email or password (invalid_grant).",
+      "invalid_auth": "Invalid e-mail or password.",
       "client_rejected": "Cloud rejected client_id/secret — Tion updated their mobile app. Capture fresh credentials (see tools/debug_auth.py).",
       "grant_deprecated": "Tion disabled password-grant (unsupported_grant_type). Auth must be migrated to OAuth code-flow with PKCE.",
       "endpoint_gone": "Endpoint api2.magicair.tion.ru is gone (404/410). Cloud moved to a new domain — check HA logs.",
       "captcha": "Cloud returned HTML (likely Cloudflare/captcha). Your IP may be blocked.",
-      "cannot_connect": "Cannot reach api2.magicair.tion.ru. Check your internet/DNS.",
+      "cannot_connect": "Could not connect to the Tion cloud. Check internet access and DNS.",
       "unknown": "Authentication failed for an unknown reason. See HA logs (enable DEBUG for custom_components.tion).",
       "invalid_address": "MAC address must look like AA:BB:CC:DD:EE:FF.",
       "ble_not_found": "The breezer is not visible to any Bluetooth adapter or proxy of Home Assistant.",
       "ble_pair_failed": "Pairing failed. Make sure the LED blinks blue and nothing else (MagicAir, phone app) is connected, then try again.",
-      "ble_not_4s": "The device answered, but it is not a Tion 4S."
+      "ble_not_4s": "The device answered, but it is not a Tion 4S.",
+      "invalid_captcha": "Tion did not accept the captcha from this page. It currently accepts it only from a page at http://localhost: set up port forwarding as the guide describes and enter http://localhost as the captcha page address.",
+      "invalid_captcha_url": "Enter an address like http://localhost or https://host:port, without a path.",
+      "invalid_code": "Invalid confirmation code.",
+      "code_expired": "The code has expired. Submit the form again to get a new one."
     },
     "abort": {
-      "already_configured": "This account or breezer is already configured."
+      "already_configured": "This account or breezer is already configured.",
+      "already_in_progress": "Signing in to this account is already in progress.",
+      "legacy_configured": "This account is already set up through the old MagicAir cloud. Move it to the new cloud in the entry's options (“Move to the new Tion cloud”) — this keeps entity IDs and history.",
+      "reauth_successful": "Signed in to Tion, the integration has reconnected.",
+      "wrong_account": "You signed in to a different Tion account than the configured one.",
+      "password_not_set": "This Tion account has no permanent password. Set one in the Tion MagicAir app and try again."
     },
     "flow_title": "{name}"
   },
@@ -54,9 +110,16 @@
         "title": "Tion options",
         "data": {
           "scan_interval": "Polling interval (seconds; cloud 30–3600, Bluetooth 15–600)",
-          "file_path": "Auth file path"
+          "file_path": "Auth file path",
+          "migrate_v4": "Move to the new Tion cloud (password, captcha and e-mail code)"
         }
       }
+    }
+  },
+  "issues": {
+    "account_not_migrated": {
+      "title": "Tion account not moved to the new cloud",
+      "description": "The Tion account {email} is not moved to the new cloud yet. Move it in the Tion MagicAir app, then reload the integration."
     }
   }
 }

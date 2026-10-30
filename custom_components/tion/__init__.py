@@ -6,8 +6,8 @@ import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL, CONF_FILE_PATH
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -20,6 +20,7 @@ from .const import (
     PLATFORMS,
     CONF_CONNECTION,
     CONNECTION_BLE,
+    CONNECTION_CLOUD_V4,
     CONF_ADDRESS,
     CONF_NAME,
 )
@@ -112,8 +113,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Главная точка инициализации интеграции (UI-конфиг или YAML-импорт)."""
-    if entry.data.get(CONF_CONNECTION) == CONNECTION_BLE:
+    connection = entry.data.get(CONF_CONNECTION)
+    if connection == CONNECTION_BLE:
         return await _async_setup_ble_entry(hass, entry)
+    if connection == CONNECTION_CLOUD_V4:
+        return await _async_setup_cloud_v4_entry(hass, entry)
     return await _async_setup_cloud_entry(hass, entry)
 
 
@@ -187,8 +191,12 @@ async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         raise ConfigEntryNotReady(f"Tion: ошибка авторизации: {exc}") from exc
 
     if not api.authorization:
-        _LOGGER.error("Tion: не удалось авторизоваться — проверьте логин/пароль")
-        return False
+        # CR-T-044: аккаунт, перенесённый в новое приложение MagicAir, старое облако
+        # не пускает — reauth-flow ведёт ко входу в облако v4.
+        raise ConfigEntryAuthFailed(
+            "Tion: старое облако MagicAir отклонило вход. Если аккаунт перенесён в новое "
+            "приложение Tion MagicAir — войдите заново (облако v4)."
+        )
 
     # CR-T-039: при сбое /location get_devices() молча возвращает [] — запись
     # загрузилась бы без устройств и не повторила бы попытку.
@@ -200,6 +208,19 @@ async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
         raise
     except Exception as exc:
         raise ConfigEntryNotReady(f"Tion: ошибка получения устройств: {exc}") from exc
+
+    # CR-T-044: MAC в реестр устройств — по нему запись переедет на облако v4
+    # с прежними entity_id (у v4 другие ID устройств). Обёртки пакета `tion` MAC
+    # не хранят, он есть только в «сырых» данных /location.
+    try:
+        raw_devices, _ = await hass.async_add_executor_job(api._get_devices_data)
+        macs = {d.guid: d.mac for d in raw_devices if d.guid and d.mac}
+    except Exception as exc:
+        _LOGGER.debug("Tion: MAC устройств не получены: %s", exc)
+        macs = {}
+    for device in devices:
+        if device.guid in macs:
+            device.macs = (macs[device.guid],)
 
     coordinator = TionDataUpdateCoordinator(hass, scan_interval, api)
 
@@ -236,6 +257,87 @@ async def _async_setup_cloud_entry(hass: HomeAssistant, entry: ConfigEntry) -> b
     return True
 
 
+async def _async_setup_cloud_v4_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Аккаунт нового облака Tion v4 (CR-T-044): gRPC-Web + NATS, вход с капчей."""
+    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+
+    from .cloud_v4 import (
+        TionAuth,
+        TionAuthError,
+        TionCloud,
+        TionConnectionError,
+        TionDeviceKey,
+        TionError,
+        TionTokens,
+        TionTransport,
+    )
+    from .cloud_v4.transport import create_ssl_context
+    from .cloud_v4_devices import TionV4Coordinator
+    from .cloud_v4_migration import async_migrate_old_ids, async_update_migration_issue
+    from .const import CONF_DEVICE_KEY
+
+    try:
+        device_key = TionDeviceKey.from_pem(entry.data[CONF_DEVICE_KEY])
+        tokens = TionTokens.from_dict(entry.data)
+    except (KeyError, TypeError, ValueError) as err:
+        raise ConfigEntryAuthFailed("Tion: нет сохранённой сессии облака v4") from err
+
+    ssl_context = await hass.async_add_executor_job(create_ssl_context)
+    transport = TionTransport(async_get_clientsession(hass), ssl_context)
+    auth = TionAuth(transport, device_key, tokens)
+    cloud = TionCloud(
+        transport,
+        auth,
+        create_task=lambda coro, name: entry.async_create_background_task(hass, coro, name),
+    )
+
+    @callback
+    def _save_tokens(new_tokens) -> None:
+        hass.config_entries.async_update_entry(entry, data={**entry.data, **new_tokens.as_dict()})
+
+    entry.async_on_unload(auth.add_update_listener(_save_tokens))
+
+    try:
+        await cloud.async_start()
+    except TionAuthError as err:
+        raise ConfigEntryAuthFailed("Tion отклонил сохранённую сессию") from err
+    except TionConnectionError as err:
+        raise ConfigEntryNotReady("Tion: облако v4 недоступно") from err
+    except TionError as err:
+        raise ConfigEntryNotReady(f"Tion: ошибка облака v4: {err}") from err
+    # LIFO: координатор (ниже) отписывается раньше, чем остановится облако
+    entry.async_on_unload(cloud.async_stop)
+
+    account = cloud.account
+    async_migrate_old_ids(hass, entry, account)
+    async_update_migration_issue(hass, entry, account)
+
+    coordinator = TionV4Coordinator(hass, entry, cloud)
+    coordinator.build_devices()
+    coordinator.async_set_updated_data(account)
+    entry.async_on_unload(coordinator.async_shutdown)
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
+        DATA_API: cloud,
+        DATA_COORDINATOR: coordinator,
+    }
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    _LOGGER.info(
+        "Tion v4: загружено %d бризеров, %d MagicAir",
+        len(coordinator.breezers),
+        len(coordinator.magicairs),
+    )
+    return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Убрать подсказку «аккаунт не перенесён» вместе с записью."""
+    from homeassistant.helpers import issue_registry as ir
+
+    ir.async_delete_issue(hass, DOMAIN, f"account_not_migrated_{entry.entry_id}")
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
@@ -244,5 +346,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Пересоздать entry при смене опций (scan_interval / file_path)."""
-    await hass.config_entries.async_reload(entry.entry_id)
+    """Пересоздать entry при смене опций (scan_interval / file_path).
+
+    schedule_reload, а не reload: при переходе на v4 reauth-flow сам перезагружает
+    запись — два запланированных reload'а HA сливает в один."""
+    hass.config_entries.async_schedule_reload(entry.entry_id)

@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [1.4.0] - 2026-10-30
+### Новое облако Tion (v4) — CR-T-044
+Tion закрывает старое облако MagicAir (`api2.magicair.tion.ru`) и переводит аккаунты
+в новое приложение Tion MagicAir. Пакет `tion` под новое облако не обновлялся.
+  - **Режим «Облако Tion»**: клиент нового облака (gRPC-Web + NATS) из
+    [vaproloff/tion_home_assistant](https://github.com/vaproloff/tion_home_assistant)
+    (MIT, коммит `a25628d`) в `custom_components/tion/cloud_v4/`, без зависимостей от HA.
+    Адаптеры (`cloud_v4_devices.py`) дают climate/sensor тот же интерфейс, что у старого
+    облака и BLE, — сущности, пресеты и сервисы прежние.
+  - Вход: пароль → SmartCaptcha (страница `/api/tion/captcha/<flow>`; Tion принимает её
+    только с `http://localhost`, поле «Адрес страницы капчи») → код из письма. Пароль
+    не хранится, сессия привязана к ключу устройства (ECDSA P-256) и продлевается сама;
+    отказ Tion → reauth.
+  - **Переход записи старого облака на v4** без потери entity_id и истории: опция
+    «Перейти на новое облако Tion» или reauth, когда старое облако отклоняет вход
+    (раньше запись просто не загружалась). Устройства и unique_id сопоставляются по MAC.
+  - Старое облако теперь пишет MAC устройств в реестр — **обновитесь до переноса
+    аккаунта в приложении**, иначе переезжать будет не по чему.
+  - Подсказка в «Исправлениях», если аккаунт ещё не перенесён в новое приложение.
+  - Тесты: +483 клиента v4 (из апстрима) и +20 HA-слоя — всего 543.
+
 ## [1.3.1] - 2026-10-29
 ### Исправления (ревью №3, CR-T-031..043)
   - **CR-T-031 (HIGH):** probe-запрос авторизации больше не пишет в лог тело успешного

@@ -42,7 +42,7 @@ def fake_ble(hass):
 async def test_flow_menu_then_ble_manual_pair(hass, fake_ble):
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
     assert result["type"] is FlowResultType.MENU
-    assert result["menu_options"] == ["cloud", "ble"]
+    assert result["menu_options"] == ["cloud_v4", "cloud", "ble"]
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "ble"})
     assert result["type"] is FlowResultType.FORM and result["step_id"] == "ble"
